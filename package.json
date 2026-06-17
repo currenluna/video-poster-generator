@@ -1,0 +1,17 @@
+{
+  "name": "video-poster-generator",
+  "version": "1.0.0",
+  "description": "Video-to-Art Poster Generator",
+  "type": "module",
+  "scripts": {
+    "dev": "vite"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  }
+}
