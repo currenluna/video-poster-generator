@@ -20,14 +20,14 @@ export default function usePosterState() {
   const [useFFmpegFallback, setUseFFmpegFallback] = useState(false);
   
   const [aspectRatio, setAspectRatio] = useState('24x36');
-  const [captureMode, setCaptureMode] = useState('seconds');
-  const [captureValue, setCaptureValue] = useState(2);
+  const [captureMode, setCaptureMode] = useState('count');
+  const [captureValue, setCaptureValue] = useState(75);
   const [colorMode, setColorMode] = useState('bw');
   const [layoutMode, setLayoutMode] = useState('auto');
   const [manualColumns, setManualColumns] = useState(4);
-  const [gapSize, setGapSize] = useState(10);
-  const [matteMargin, setMatteMargin] = useState(12);
-  const [labelType, setLabelType] = useState('seq');
+  const [gapSize, setGapSize] = useState(3);
+  const [matteMargin, setMatteMargin] = useState(10);
+  const [labelType, setLabelType] = useState('none');
   const [customMeta, setCustomMeta] = useState('');
   const [exportFormat, setExportFormat] = useState('jpeg');
   

@@ -23,13 +23,25 @@ import { RESOLUTIONS } from './constants';
  * @param {number} gap          — gap between frames in pixels
  * @returns {{ columns, rows, frameWidth, frameHeight }}
  */
-export function solveOptimalLayout(N, frameWidth, frameHeight, targetWidth, targetHeight, gap) {
+export function solveOptimalLayout(N, frameWidth, frameHeight, targetWidth, targetHeight, gap, aspectRatio) {
   const frameAspect = frameWidth / frameHeight;
   let bestColumns = 1;
   let bestScale = 0;
+  let bestDiff = Infinity;
+
+  // Determine target aspect ratio of the grid
+  let targetAspect = 1.0;
+  if (aspectRatio === '24x36') {
+    targetAspect = 3 / 4;
+  } else if (aspectRatio === '36x24') {
+    targetAspect = 4 / 3;
+  } else if (aspectRatio === '24x24') {
+    targetAspect = 1.0;
+  }
 
   for (let C = 1; C <= N; C++) {
-    const R = Math.ceil(N / C);
+    const R = Math.floor(N / C);
+    if (R === 0) continue;
 
     // How wide can each thumbnail be to fit C columns?
     const maxSWidth = (targetWidth - (C - 1) * gap) / C;
@@ -37,16 +49,26 @@ export function solveOptimalLayout(N, frameWidth, frameHeight, targetWidth, targ
     const maxSHeight = ((targetHeight - (R - 1) * gap) * frameAspect) / R;
 
     const s = Math.min(maxSWidth, maxSHeight);
+    if (s <= 0) continue;
 
-    if (s > 0 && s > bestScale) {
+    const gridW = C * s + (C - 1) * gap;
+    const gridH = R * (s / frameAspect) + (R - 1) * gap;
+    const gridAspect = gridW / gridH;
+
+    const diff = Math.abs(gridAspect - targetAspect);
+
+    if (diff < bestDiff || (Math.abs(diff - bestDiff) < 0.001 && s > bestScale)) {
+      bestDiff = diff;
       bestScale = s;
       bestColumns = C;
     }
   }
 
+  const finalRows = Math.floor(N / bestColumns);
+
   return {
     columns: bestColumns,
-    rows: Math.ceil(N / bestColumns),
+    rows: finalRows > 0 ? finalRows : 1,
     frameWidth: bestScale,
     frameHeight: bestScale / frameAspect,
   };
@@ -105,11 +127,15 @@ export function drawPoster(canvas, {
   let layout;
 
   if (layoutMode === 'auto') {
-    layout = solveOptimalLayout(N, videoWidth, videoHeight, targetGridWidth, targetGridHeight, scaledGap);
+    layout = solveOptimalLayout(N, videoWidth, videoHeight, targetGridWidth, targetGridHeight, scaledGap, aspectRatio);
   } else {
     // Manual column count
-    const cols = manualColumns;
-    const rows = Math.ceil(N / cols);
+    let cols = manualColumns;
+    let rows = Math.floor(N / cols);
+    if (rows === 0) {
+      cols = N;
+      rows = 1;
+    }
     const maxSWidth = (targetGridWidth - (cols - 1) * scaledGap) / cols;
     const maxSHeight = ((targetGridHeight - (rows - 1) * scaledGap) * videoAspect) / rows;
     const s = Math.min(maxSWidth, maxSHeight);
@@ -130,7 +156,8 @@ export function drawPoster(canvas, {
   ctx.save();
   ctx.filter = colorMode === 'bw' ? 'grayscale(100%)' : 'none';
 
-  for (let i = 0; i < N; i++) {
+  const totalDisplayFrames = layout.columns * layout.rows;
+  for (let i = 0; i < totalDisplayFrames; i++) {
     const frame = extractedFrames[i];
     const r = Math.floor(i / layout.columns);
     const c = i % layout.columns;
@@ -150,7 +177,7 @@ export function drawPoster(canvas, {
   ctx.lineWidth = Math.max(1, Math.round(1.0 * scaleRatio));
   const fontMono = "'Space Mono', monospace";
 
-  for (let i = 0; i < N; i++) {
+  for (let i = 0; i < totalDisplayFrames; i++) {
     const frame = extractedFrames[i];
     const r = Math.floor(i / layout.columns);
     const c = i % layout.columns;

@@ -1,4 +1,23 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
+
+/**
+ * ThumbnailPreview — Renders the first frame canvas to a small canvas.
+ */
+function ThumbnailPreview({ canvas }) {
+  const thumbnailCanvasRef = useRef(null);
+
+  useEffect(() => {
+    const destCanvas = thumbnailCanvasRef.current;
+    if (destCanvas && canvas) {
+      destCanvas.width = canvas.width;
+      destCanvas.height = canvas.height;
+      const ctx = destCanvas.getContext('2d');
+      ctx.drawImage(canvas, 0, 0);
+    }
+  }, [canvas]);
+
+  return <canvas ref={thumbnailCanvasRef} className="thumbnail-canvas" />;
+}
 
 /**
  * SourceUpload — Drag-and-drop upload zone and video info display.
@@ -19,11 +38,19 @@ export default function SourceUpload({
   videoWidth,
   videoHeight,
   onFileSelect,
+  isExtracting,
+  extractedFrames,
+  onDelete,
 }) {
   const fileInputRef = useRef(null);
   const [isDragOver, setIsDragOver] = useState(false);
 
   const handleClick = () => {
+    fileInputRef.current.click();
+  };
+
+  const handleReplaceClick = (e) => {
+    e.stopPropagation();
     fileInputRef.current.click();
   };
 
@@ -57,32 +84,69 @@ export default function SourceUpload({
       : videoFile.name
     : '';
 
+  const showThumbnail = videoFile && extractedFrames && extractedFrames.length > 0;
+
   return (
     <section className="control-section">
       <h2>01 / SOURCE</h2>
 
-      <div
-        id="drop-zone"
-        className={`upload-zone${isDragOver ? ' dragover' : ''}`}
-        onClick={handleClick}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
-        <span className="upload-icon">＋</span>
-        <p className="upload-text">DRAG VIDEO FILE HERE OR CLICK TO BROWSE</p>
-        <p className="upload-sub">SUPPORTED FORMATS: MP4, MOV, WEBM, MKV (MAX 500MB)</p>
-        <input
-          type="file"
-          id="video-input"
-          ref={fileInputRef}
-          accept="video/*"
-          style={{ display: 'none' }}
-          onChange={handleFileChange}
-        />
-      </div>
+      <input
+        type="file"
+        id="video-input"
+        ref={fileInputRef}
+        accept="video/*"
+        style={{ display: 'none' }}
+        onChange={handleFileChange}
+      />
 
-      {videoFile && (
+      {isExtracting ? (
+        <div className="upload-zone loading-zone">
+          <div className="spinner"></div>
+          <p className="upload-text">PROCESSING VIDEO...</p>
+          <p className="upload-sub">EXTRACTING STILL FRAMES</p>
+        </div>
+      ) : showThumbnail ? (
+        <div className="thumbnail-zone">
+          <ThumbnailPreview canvas={extractedFrames[0].canvas} />
+          <div className="thumbnail-overlay">
+            <div className="thumbnail-header">
+              <button
+                type="button"
+                className="btn-delete"
+                onClick={(e) => { e.stopPropagation(); onDelete(); }}
+                title="Delete Video"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="thumbnail-footer">
+              <span className="thumbnail-filename" title={videoFile.name}>{displayName}</span>
+              <button
+                type="button"
+                className="btn-replace"
+                onClick={handleReplaceClick}
+              >
+                Replace
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div
+          id="drop-zone"
+          className={`upload-zone${isDragOver ? ' dragover' : ''}`}
+          onClick={handleClick}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          <span className="upload-icon">＋</span>
+          <p className="upload-text">DRAG VIDEO FILE HERE OR CLICK TO BROWSE</p>
+          <p className="upload-sub">SUPPORTED FORMATS: MP4, MOV, WEBM, MKV (MAX 500MB)</p>
+        </div>
+      )}
+
+      {videoFile && !isExtracting && (
         <div id="video-info" className="video-info-box">
           <div className="info-row">
             <span className="info-label">FILE:</span>

@@ -38,6 +38,18 @@ export function calculateTimestamps(duration, captureMode, captureValue, fps) {
     for (let t = 0; t < duration; t += captureValue) {
       timestamps.push(t);
     }
+  } else if (captureMode === 'count') {
+    // Capture a specific total count of stills, evenly distributed
+    const K = Math.max(1, Math.round(captureValue));
+    if (K === 1) {
+      timestamps.push(0);
+    } else {
+      // Use duration - 0.05 to avoid seeking exactly at/past the end of the video
+      const endLimit = Math.max(0, duration - 0.05);
+      for (let i = 0; i < K; i++) {
+        timestamps.push((i / (K - 1)) * endLimit);
+      }
+    }
   } else {
     // Capture a frame every N video frames
     const totalVideoFrames = Math.floor(duration * fps);
@@ -52,5 +64,5 @@ export function calculateTimestamps(duration, captureMode, captureValue, fps) {
     timestamps.push(0);
   }
 
-  return timestamps.slice(0, 100); // Safety cap to prevent memory issues
+  return timestamps.slice(0, 150); // Safety cap to prevent memory issues
 }

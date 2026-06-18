@@ -220,32 +220,46 @@ export async function extractFramesNative(
 // ---------------------------------------------------------------------------
 let ffmpegInstance = null;
 
-async function initFFmpeg(onStatus, onDurationFound) {
-  if (ffmpegInstance) return ffmpegInstance;
+async function initFFmpeg(onStatus, onDurationFound, onFpsFound) {
+  if (ffmpegInstance) {
+    ffmpegInstance._callbacks = { onStatus, onDurationFound, onFpsFound };
+    return ffmpegInstance;
+  }
 
   onStatus('LOADING FFMPEG DECODER (25MB)...');
   const { createFFmpeg } = window.FFmpeg;
   ffmpegInstance = createFFmpeg({
     log: true,
     logger: ({ message }) => {
-      const match = message.match(/Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})/);
-      if (match) {
-        const d = parseInt(match[1]) * 3600 + parseInt(match[2]) * 60
-                + parseInt(match[3]) + parseInt(match[4]) / 100;
-        if (d > 0) onDurationFound(d);
+      if (ffmpegInstance._callbacks) {
+        const { onDurationFound: durationCallback, onFpsFound: fpsCallback } = ffmpegInstance._callbacks;
+        
+        const match = message.match(/Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})/);
+        if (match && durationCallback) {
+          const d = parseInt(match[1]) * 3600 + parseInt(match[2]) * 60
+                  + parseInt(match[3]) + parseInt(match[4]) / 100;
+          if (d > 0) durationCallback(d);
+        }
+
+        const fpsMatch = message.match(/,\s*(\d+(?:\.\d+)?)\s*fps/);
+        if (fpsMatch && fpsCallback) {
+          const fps = parseFloat(fpsMatch[1]);
+          if (fps > 0) fpsCallback(fps);
+        }
       }
     },
     corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
   });
+  ffmpegInstance._callbacks = { onStatus, onDurationFound, onFpsFound };
   await ffmpegInstance.load();
   return ffmpegInstance;
 }
 
 export async function extractFramesFFmpeg(
   videoFile, timestamps, fps,
-  { onProgress, shouldCancel, onStatus, onDurationFound, onVideoInfo }
+  { onProgress, shouldCancel, onStatus, onDurationFound, onVideoInfo, onFpsFound }
 ) {
-  const instance = await initFFmpeg(onStatus, onDurationFound);
+  const instance = await initFFmpeg(onStatus, onDurationFound, onFpsFound);
 
   let fileExists = false;
   try {

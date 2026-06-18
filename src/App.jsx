@@ -47,8 +47,15 @@ export default function App() {
   );
 
   // 2. Perform Frame Extraction
-  const performExtraction = async (tsList) => {
-    if (!state.videoFile) return;
+  const performExtraction = async (
+    tsList,
+    file = state.videoFile,
+    forceFFmpeg = state.useFFmpegFallback,
+    width = state.videoWidth,
+    height = state.videoHeight,
+    fps = state.videoFps
+  ) => {
+    if (!file) return;
 
     const extractionId = Symbol('extractionId');
     currentExtractionIdRef.current = extractionId;
@@ -60,8 +67,8 @@ export default function App() {
 
     const shouldCancel = () => currentExtractionIdRef.current !== extractionId;
 
-    if (state.useFFmpegFallback) {
-      await runFFmpegExtraction(tsList, shouldCancel);
+    if (forceFFmpeg) {
+      await runFFmpegExtraction(file, tsList, shouldCancel);
       return;
     }
 
@@ -71,9 +78,9 @@ export default function App() {
       const frames = await extractFramesNative(
         video,
         tsList,
-        state.videoWidth,
-        state.videoHeight,
-        state.videoFps,
+        width,
+        height,
+        fps,
         {
           onProgress: (index, total) => {
             if (shouldCancel()) return;
@@ -94,14 +101,14 @@ export default function App() {
     } catch (err) {
       console.warn('Native video seek/extraction failed. Initiating FFmpeg WASM fallback...', err);
       state.setUseFFmpegFallback(true);
-      await runFFmpegExtraction(tsList, shouldCancel);
+      await runFFmpegExtraction(file, tsList, shouldCancel);
     }
   };
 
-  const runFFmpegExtraction = async (tsList, shouldCancel) => {
+  const runFFmpegExtraction = async (file, tsList, shouldCancel) => {
     try {
       const frames = await extractFramesFFmpeg(
-        state.videoFile,
+        file,
         tsList,
         state.videoFps,
         {
@@ -122,6 +129,10 @@ export default function App() {
             if (shouldCancel()) return;
             state.setVideoWidth(w);
             state.setVideoHeight(h);
+          },
+          onFpsFound: (fps) => {
+            if (shouldCancel()) return;
+            state.setVideoFps(fps);
           },
         }
       );
@@ -187,7 +198,7 @@ export default function App() {
         state.captureValue,
         detectedFps
       );
-      performExtraction(initialTimestamps);
+      performExtraction(initialTimestamps, file, false, meta.width, meta.height, detectedFps);
     } catch (err) {
       console.error('Failed to load video natively:', err);
       state.setUseFFmpegFallback(true);
@@ -200,7 +211,7 @@ export default function App() {
         state.captureValue,
         state.videoFps
       );
-      performExtraction(initialTimestamps);
+      performExtraction(initialTimestamps, file, true);
     }
   };
 
@@ -315,6 +326,23 @@ export default function App() {
           videoWidth={state.videoWidth}
           videoHeight={state.videoHeight}
           onFileSelect={handleFileSelect}
+          isExtracting={state.isExtracting}
+          extractedFrames={state.extractedFrames}
+          onDelete={() => {
+            if (state.videoUrl) {
+              URL.revokeObjectURL(state.videoUrl);
+            }
+            state.setVideoFile(null);
+            state.setVideoUrl(null);
+            state.setExtractedFrames([]);
+            state.setVideoWidth(0);
+            state.setVideoHeight(0);
+            state.setVideoDuration(0);
+            state.setVideoFps(30);
+            state.setCustomMeta('');
+            state.setStatusText('AWAITING VIDEO FILE UPLOAD...');
+            state.setStatusType('warning');
+          }}
         />
 
         <FramingControls

@@ -14,7 +14,9 @@ export default function FramingControls({
   const handleModeChange = (e) => {
     const mode = e.target.value;
     setCaptureMode(mode);
-    if (mode === 'seconds') {
+    if (mode === 'count') {
+      setCaptureValue(75);
+    } else if (mode === 'seconds') {
       setCaptureValue(2);
     } else {
       setCaptureValue(60);
@@ -27,7 +29,7 @@ export default function FramingControls({
   };
 
   const handleStepDown = () => {
-    const step = captureMode === 'seconds' ? 0.2 : 5;
+    const step = captureMode === 'seconds' ? 0.2 : (captureMode === 'count' ? 5 : 5);
     const minVal = captureMode === 'seconds' ? 0.1 : 1;
     setCaptureValue((prev) => {
       const next = prev - step;
@@ -37,16 +39,16 @@ export default function FramingControls({
   };
 
   const handleStepUp = () => {
-    const step = captureMode === 'seconds' ? 0.2 : 5;
+    const step = captureMode === 'seconds' ? 0.2 : (captureMode === 'count' ? 5 : 5);
     setCaptureValue((prev) => {
       return parseFloat((prev + step).toFixed(captureMode === 'seconds' ? 1 : 0));
     });
   };
 
-  // Check if warning is active
-  const showWarning = estimatedStillsCount < 4 || estimatedStillsCount > 48;
+  // Check if warning is active (recommended 4 to 120 stills)
+  const showWarning = estimatedStillsCount < 4 || estimatedStillsCount > 120;
 
-  // Format value for input box (seconds can have decimals, frames should be integer)
+  // Format value for input box (seconds can have decimals, frames/count should be integer)
   const inputDisplay = captureMode === 'seconds'
     ? captureValue
     : Math.round(captureValue);
@@ -63,6 +65,7 @@ export default function FramingControls({
           value={captureMode}
           onChange={handleModeChange}
         >
+          <option value="count">TOTAL STILLS COUNT</option>
           <option value="seconds">SECONDS INTERVAL</option>
           <option value="frames">FRAME COUNT INTERVAL</option>
         </select>
@@ -71,7 +74,7 @@ export default function FramingControls({
       {/* Interval value stepper */}
       <div className="control-row">
         <label id="capture-value-label" htmlFor="capture-value">
-          {captureMode === 'seconds' ? 'EVERY (SEC):' : 'EVERY (FRAMES):'}
+          {captureMode === 'seconds' ? 'EVERY (SEC):' : captureMode === 'count' ? 'TOTAL STILLS:' : 'EVERY (FRAMES):'}
         </label>
         <div className="stepper-input">
           <button id="step-down" className="btn-step" onClick={handleStepDown}>−</button>
@@ -98,7 +101,7 @@ export default function FramingControls({
         id="stills-warning"
         className={`warning-box${showWarning ? '' : ' hidden'}`}
       >
-        ⚠️ RECOMMENDED STILLS RANGE IS 4 TO 48 TO MAINTAIN OPTIMAL POSTER COMPOSITION AND PREVENT EXPORT ISSUES.
+        ⚠️ RECOMMENDED STILLS RANGE IS 4 TO 120 TO MAINTAIN OPTIMAL POSTER COMPOSITION AND PREVENT EXPORT ISSUES.
       </div>
     </section>
   );
