@@ -10,8 +10,8 @@
 // ---------------------------------------------------------------------------
 // Each key maps a poster format to its pixel dimensions at 300 dots-per-inch.
 export const RESOLUTIONS = {
-  '24x36': { width: 7200, height: 10800, label: '24" x 36" (Portrait)' },
-  '36x24': { width: 10800, height: 7200, label: '36" x 24" (Landscape)' },
+  '27x36': { width: 8100, height: 10800, label: '27" x 36" (Portrait)' },
+  '36x27': { width: 10800, height: 8100, label: '36" x 27" (Landscape)' },
   '24x24': { width: 7200, height: 7200, label: '24" x 24" (Square)' },
 };
 
@@ -28,40 +28,56 @@ export const RESOLUTIONS = {
  * @param {number} fps         — detected frames-per-second of the video
  * @returns {number[]}         — list of timestamps to extract
  */
-export function calculateTimestamps(duration, captureMode, captureValue, fps) {
+export function calculateTimestamps(duration, captureMode, captureValue, fps, clipStart = 0, clipEnd = duration) {
   if (!duration || duration <= 0) return [];
+
+  const start = Math.max(0, Math.min(clipStart, duration));
+  const end = Math.max(start, Math.min(clipEnd || duration, duration));
+  const activeDuration = end - start;
 
   const timestamps = [];
 
   if (captureMode === 'seconds') {
-    // Capture a frame every N seconds
-    for (let t = 0; t < duration; t += captureValue) {
+    // Capture a frame every N seconds starting from clipStart
+    for (let t = start; t < end; t += captureValue) {
       timestamps.push(t);
     }
   } else if (captureMode === 'count') {
-    // Capture a specific total count of stills, evenly distributed
-    const K = Math.max(1, Math.round(captureValue));
-    if (K === 1) {
-      timestamps.push(0);
+    // Capture a specific total count of stills, evenly distributed in [start, end]
+    const availableFrames = Math.max(1, Math.floor(activeDuration * fps));
+    const requestedStills = Math.max(1, Math.round(captureValue));
+    
+    if (requestedStills >= availableFrames) {
+      // If requested stills exceeds or equals available physical frames, sample every physical frame
+      for (let i = 0; i < availableFrames; i++) {
+        timestamps.push(start + i / fps);
+      }
     } else {
-      // Use duration - 0.05 to avoid seeking exactly at/past the end of the video
-      const endLimit = Math.max(0, duration - 0.05);
-      for (let i = 0; i < K; i++) {
-        timestamps.push((i / (K - 1)) * endLimit);
+      const K = requestedStills;
+      if (K === 1) {
+        timestamps.push(start);
+      } else {
+        // Use end - 0.05 to avoid seeking exactly at/past the end of the video
+        const endLimit = Math.max(start, end - 0.05);
+        const limitDuration = endLimit - start;
+        for (let i = 0; i < K; i++) {
+          timestamps.push(start + (i / (K - 1)) * limitDuration);
+        }
       }
     }
   } else {
     // Capture a frame every N video frames
-    const totalVideoFrames = Math.floor(duration * fps);
-    for (let f = 0; f < totalVideoFrames; f += captureValue) {
+    const startFrame = Math.floor(start * fps);
+    const endFrame = Math.floor(end * fps);
+    for (let f = startFrame; f < endFrame; f += captureValue) {
       const t = f / fps;
-      if (t < duration) timestamps.push(t);
+      if (t < end) timestamps.push(t);
     }
   }
 
   // Always include at least one frame
   if (timestamps.length === 0 && duration > 0) {
-    timestamps.push(0);
+    timestamps.push(start);
   }
 
   return timestamps.slice(0, 150); // Safety cap to prevent memory issues

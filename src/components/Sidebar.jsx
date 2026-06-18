@@ -17,22 +17,22 @@
  *    and those child components appear where {children} is placed below.
  */
 
-export default function Sidebar({ children, onExport, exportDisabled }) {
+export default function Sidebar({ children, onExport, exportDisabled, onBuy }) {
   return (
     <aside className="sidebar">
-      {/* Fixed header */}
-      <header className="sidebar-header">
-        <h1>POSTER.GEN</h1>
-        <p className="brand-sub">CHRONOPHOTOGRAPHIC STUDY / V0.1</p>
-      </header>
+      {/* Sidebar Header */}
+      <div className="sidebar-header">
+        <h1>REVIEW DESIGN</h1>
+        <p className="brand-sub">CHOOSE LAYOUT, STYLE & OPTIONS</p>
+      </div>
 
       {/* Scrollable control sections (filled by parent via children/slot) */}
       <div className="control-groups">
         {children}
       </div>
 
-      {/* Fixed footer with export button */}
-      <footer className="sidebar-footer">
+      {/* Fixed footer with export and buy buttons */}
+      <footer className="sidebar-footer" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
         <button
           id="btn-export"
           className="action-btn"
@@ -40,6 +40,14 @@ export default function Sidebar({ children, onExport, exportDisabled }) {
           onClick={onExport}
         >
           EXPORT PRINT FILE (300 PPI)
+        </button>
+        <button
+          id="btn-add-to-cart"
+          className="action-btn cart-btn-sidebar"
+          disabled={exportDisabled}
+          onClick={onBuy}
+        >
+          BUY
         </button>
       </footer>
     </aside>

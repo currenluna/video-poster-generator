@@ -1,107 +1,53 @@
 /**
- * FramingControls — Sets the frame capture mode and interval.
- *
- * 💡 Svelte comparison:
- *    Conditional rendering:
- *      In Svelte: {#if count < 4 || count > 48}...{/if}
- *      In React: { (count < 4 || count > 48) && <div className="warning">...</div> }
+ * FramingControls — Sets the total stills count, capped to physical frames.
  */
 export default function FramingControls({
-  captureMode, setCaptureMode,
   captureValue, setCaptureValue,
-  estimatedStillsCount,
+  availableFrames,
 }) {
-  const handleModeChange = (e) => {
-    const mode = e.target.value;
-    setCaptureMode(mode);
-    if (mode === 'count') {
-      setCaptureValue(75);
-    } else if (mode === 'seconds') {
-      setCaptureValue(2);
-    } else {
-      setCaptureValue(60);
-    }
-  };
+  const maxStills = Math.min(120, availableFrames);
 
-  const handleValueChange = (e) => {
-    const val = parseFloat(e.target.value) || 1;
-    setCaptureValue(Math.max(val, captureMode === 'seconds' ? 0.1 : 1));
+  const handleSliderChange = (e) => {
+    setCaptureValue(parseInt(e.target.value) || 1);
   };
 
   const handleStepDown = () => {
-    const step = captureMode === 'seconds' ? 0.2 : (captureMode === 'count' ? 5 : 5);
-    const minVal = captureMode === 'seconds' ? 0.1 : 1;
-    setCaptureValue((prev) => {
-      const next = prev - step;
-      // Precision handling for floating point math
-      return parseFloat(Math.max(next, minVal).toFixed(captureMode === 'seconds' ? 1 : 0));
-    });
+    setCaptureValue((prev) => Math.max(1, prev - 5));
   };
 
   const handleStepUp = () => {
-    const step = captureMode === 'seconds' ? 0.2 : (captureMode === 'count' ? 5 : 5);
-    setCaptureValue((prev) => {
-      return parseFloat((prev + step).toFixed(captureMode === 'seconds' ? 1 : 0));
-    });
+    setCaptureValue((prev) => Math.min(maxStills, prev + 5));
   };
-
-  // Check if warning is active (recommended 4 to 120 stills)
-  const showWarning = estimatedStillsCount < 4 || estimatedStillsCount > 120;
-
-  // Format value for input box (seconds can have decimals, frames/count should be integer)
-  const inputDisplay = captureMode === 'seconds'
-    ? captureValue
-    : Math.round(captureValue);
 
   return (
     <section className="control-section">
-      <h2>02 / FRAMING</h2>
+      <h2>04 / TIMING</h2>
 
-      {/* Mode selection */}
+      {/* Total stills count slider and stepper */}
       <div className="control-row">
-        <label htmlFor="capture-mode">CAPTURE BY:</label>
-        <select
-          id="capture-mode"
-          value={captureMode}
-          onChange={handleModeChange}
-        >
-          <option value="count">TOTAL STILLS COUNT</option>
-          <option value="seconds">SECONDS INTERVAL</option>
-          <option value="frames">FRAME COUNT INTERVAL</option>
-        </select>
-      </div>
-
-      {/* Interval value stepper */}
-      <div className="control-row">
-        <label id="capture-value-label" htmlFor="capture-value">
-          {captureMode === 'seconds' ? 'EVERY (SEC):' : captureMode === 'count' ? 'TOTAL STILLS:' : 'EVERY (FRAMES):'}
-        </label>
-        <div className="stepper-input">
-          <button id="step-down" className="btn-step" onClick={handleStepDown}>−</button>
+        <label htmlFor="capture-value">TOTAL STILLS:</label>
+        <div className="slider-container" style={{ flex: 1, gap: '0.8rem' }}>
           <input
-            type="number"
-            id="capture-value"
-            value={inputDisplay}
-            step={captureMode === 'seconds' ? '0.1' : '1'}
-            min={captureMode === 'seconds' ? '0.1' : '1'}
-            onChange={handleValueChange}
+            type="range"
+            id="capture-value-slider"
+            min="1"
+            max={maxStills}
+            value={Math.min(captureValue, maxStills)}
+            onChange={handleSliderChange}
+            style={{ flex: 1 }}
           />
-          <button id="step-up" className="btn-step" onClick={handleStepUp}>＋</button>
+          <div className="stepper-input" style={{ width: '80px', flexShrink: 0 }}>
+            <button type="button" className="btn-step" onClick={handleStepDown}>−</button>
+            <span style={{ fontSize: '11px', fontFamily: "'Space Mono', monospace", fontWeight: '700', textAlign: 'center', minWidth: '24px' }}>
+              {Math.min(captureValue, maxStills)}
+            </span>
+            <button type="button" className="btn-step" onClick={handleStepUp}>＋</button>
+          </div>
         </div>
       </div>
 
-      {/* Estimated stills count */}
-      <div className="control-row">
-        <label>ESTIMATED STILLS:</label>
-        <span id="est-stills-count" className="slider-val">{estimatedStillsCount}</span>
-      </div>
-
-      {/* Warning message */}
-      <div
-        id="stills-warning"
-        className={`warning-box${showWarning ? '' : ' hidden'}`}
-      >
-        ⚠️ RECOMMENDED STILLS RANGE IS 4 TO 120 TO MAINTAIN OPTIMAL POSTER COMPOSITION AND PREVENT EXPORT ISSUES.
+      <div style={{ marginTop: '0.5rem', fontSize: '9px', color: 'var(--text-muted)', fontFamily: "'Space Mono', monospace" }}>
+        AVAILABLE PHYSICAL STILLS: {availableFrames}
       </div>
     </section>
   );

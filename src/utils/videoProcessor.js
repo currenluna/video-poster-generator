@@ -325,3 +325,7 @@ export async function extractFramesFFmpeg(
 
   return shouldCancel() ? null : frames;
 }
+
+// ---------------------------------------------------------------------------
+// End of videoProcessor.js
+// ---------------------------------------------------------------------------

@@ -1,13 +1,14 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import usePosterState from './hooks/usePosterState';
 import Sidebar from './components/Sidebar';
-import StatusBar from './components/StatusBar';
 import SourceUpload from './components/SourceUpload';
 import FramingControls from './components/FramingControls';
 import GridControls from './components/GridControls';
 import RenderControls from './components/RenderControls';
-import EditionControls from './components/EditionControls';
+import PageControls from './components/PageControls';
 import PosterPreview from './components/PosterPreview';
+import CartView from './components/CartView';
+import { drawPoster } from './utils/posterRenderer';
 import { calculateTimestamps, RESOLUTIONS } from './utils/constants';
 import {
   loadVideoMetadata,
@@ -31,10 +32,11 @@ import {
 export default function App() {
   const state = usePosterState();
   const hiddenVideoRef = useRef(null);
-  
+
+
   // Ref to store the latest extraction ID for cancellation check
   const currentExtractionIdRef = useRef(null);
-  
+
   // Ref to hold the debounce timeout id
   const debounceTimeoutRef = useRef(null);
 
@@ -43,7 +45,9 @@ export default function App() {
     state.videoDuration,
     state.captureMode,
     state.captureValue,
-    state.videoFps
+    state.videoFps,
+    state.clipStart,
+    state.clipEnd
   );
 
   // 2. Perform Frame Extraction
@@ -57,9 +61,11 @@ export default function App() {
   ) => {
     if (!file) return;
 
+    const finalTsList = tsList;
+
     const extractionId = Symbol('extractionId');
     currentExtractionIdRef.current = extractionId;
-    
+
     state.setIsExtracting(true);
     state.setExtractedFrames([]);
     state.setStatusText('EXTRACTING... ');
@@ -68,7 +74,7 @@ export default function App() {
     const shouldCancel = () => currentExtractionIdRef.current !== extractionId;
 
     if (forceFFmpeg) {
-      await runFFmpegExtraction(file, tsList, shouldCancel);
+      await runFFmpegExtraction(file, finalTsList, shouldCancel);
       return;
     }
 
@@ -77,7 +83,7 @@ export default function App() {
       const video = hiddenVideoRef.current;
       const frames = await extractFramesNative(
         video,
-        tsList,
+        finalTsList,
         width,
         height,
         fps,
@@ -101,7 +107,7 @@ export default function App() {
     } catch (err) {
       console.warn('Native video seek/extraction failed. Initiating FFmpeg WASM fallback...', err);
       state.setUseFFmpegFallback(true);
-      await runFFmpegExtraction(file, tsList, shouldCancel);
+      await runFFmpegExtraction(file, finalTsList, shouldCancel);
     }
   };
 
@@ -159,15 +165,16 @@ export default function App() {
     currentExtractionIdRef.current = null;
     state.setUseFFmpegFallback(false);
     state.setVideoFile(file);
+    state.setVideoName(file.name.replace(/\.[^/.]+$/, "").toUpperCase());
     state.setExtractedFrames([]);
     state.setVideoWidth(0);
     state.setVideoHeight(0);
-    
+
     // Revoke old URL if it exists
     if (state.videoUrl) {
       URL.revokeObjectURL(state.videoUrl);
     }
-    
+
     const url = URL.createObjectURL(file);
     state.setVideoUrl(url);
     state.setStatusText('LOADING VIDEO...');
@@ -183,20 +190,22 @@ export default function App() {
       state.setVideoWidth(meta.width);
       state.setVideoHeight(meta.height);
 
-      // Default the metadata footer title to uppercase filename
-      const title = file.name.substring(0, 30).toUpperCase();
-      state.setCustomMeta(title);
-
       state.setStatusText('DETECTING VIDEO FRAME RATE...');
       const detectedFps = await detectFrameRate(video);
       state.setVideoFps(detectedFps);
+
+      // Initialize clip range
+      state.setClipStart(0);
+      state.setClipEnd(meta.duration);
 
       // Trigger extraction with the newly found meta/fps
       const initialTimestamps = calculateTimestamps(
         meta.duration,
         state.captureMode,
         state.captureValue,
-        detectedFps
+        detectedFps,
+        0,
+        meta.duration
       );
       performExtraction(initialTimestamps, file, false, meta.width, meta.height, detectedFps);
     } catch (err) {
@@ -204,12 +213,19 @@ export default function App() {
       state.setUseFFmpegFallback(true);
       state.setStatusText('NATIVE LOAD FAILED. INITIATING FFMPEG DECODER...');
       state.setStatusType('warning');
+      
+      const fallbackDuration = state.videoDuration || 10;
+      state.setClipStart(0);
+      state.setClipEnd(fallbackDuration);
+
       // FFmpeg will extract dimensions on-the-fly, so trigger now
       const initialTimestamps = calculateTimestamps(
-        state.videoDuration || 10,
+        fallbackDuration,
         state.captureMode,
         state.captureValue,
-        state.videoFps
+        state.videoFps,
+        0,
+        fallbackDuration
       );
       performExtraction(initialTimestamps, file, true);
     }
@@ -235,24 +251,22 @@ export default function App() {
         clearTimeout(debounceTimeoutRef.current);
       }
     };
-  }, [state.captureMode, state.captureValue]);
+  }, [state.captureMode, state.captureValue, state.clipStart, state.clipEnd]);
 
-  // Redraw poster on simple aesthetic option changes (without re-extracting frames)
+  // Calculate maximum available physical frames in the trimmed range
+  const activeDuration = state.clipEnd - state.clipStart;
+  const availableFrames = state.videoDuration > 0 
+    ? Math.max(1, Math.floor(activeDuration * state.videoFps)) 
+    : 120;
+
+  // Automatically clamp captureValue to available frames based on video clip trim selection
+  // Guard: only clamp when clip bounds are valid (clipEnd > clipStart) to avoid race condition
+  // during initial video load where videoFile is set before clipEnd is updated from 0.
   useEffect(() => {
-    if (state.extractedFrames.length > 0) {
-      state.setStatusText('POSTER UPDATED.');
-      state.setStatusType('active');
+    if (state.videoFile && state.clipEnd > state.clipStart && state.captureValue > availableFrames) {
+      state.setCaptureValue(availableFrames);
     }
-  }, [
-    state.aspectRatio,
-    state.matteMargin,
-    state.gapSize,
-    state.layoutMode,
-    state.manualColumns,
-    state.colorMode,
-    state.labelType,
-    state.customMeta,
-  ]);
+  }, [availableFrames, state.captureValue, state.videoFile, state.clipEnd, state.clipStart]);
 
   // 4. Handle Export
   const handleExport = () => {
@@ -266,10 +280,12 @@ export default function App() {
         const canvas = document.getElementById('poster-canvas');
         if (!canvas) throw new Error('Canvas element not found.');
 
-        const format = state.exportFormat === 'png' ? 'image/png' : 'image/jpeg';
-        const ext = state.exportFormat === 'png' ? 'png' : 'jpg';
+        // Re-draw canvas at full resolution for high-quality export
+        const exportSettings = { ...settings, isExport: true };
+        drawPoster(canvas, exportSettings);
+
         const res = RESOLUTIONS[state.aspectRatio];
-        const filename = `motion_study_${state.aspectRatio}_${res.width}x${res.height}.${ext}`;
+        const filename = `motion_study_${state.aspectRatio}_${res.width}x${res.height}.jpg`;
 
         canvas.toBlob((blob) => {
           if (!blob) {
@@ -287,7 +303,10 @@ export default function App() {
           setTimeout(() => URL.revokeObjectURL(dlUrl), 100);
           state.setStatusText('EXPORT COMPLETED.');
           state.setStatusType('active');
-        }, format, 0.95);
+
+          // Restore normal scaled-down resolution preview
+          drawPoster(canvas, { ...settings, isExport: false });
+        }, 'image/jpeg', 0.95);
       } catch (err) {
         console.error('Export failed:', err);
         state.setStatusText(`EXPORT ERROR: ${err.message}`);
@@ -302,89 +321,170 @@ export default function App() {
     aspectRatio: state.aspectRatio,
     matteMargin: state.matteMargin,
     gapSize: state.gapSize,
+    scaleRandomness: state.scaleRandomness,
+    positionRandomness: state.positionRandomness,
+    rotationRandomness: state.rotationRandomness,
+    alternateMirror: state.alternateMirror,
+    paperColor: state.paperColor,
     layoutMode: state.layoutMode,
     manualColumns: state.manualColumns,
     colorMode: state.colorMode,
-    labelType: state.labelType,
+    styleMode: state.styleMode,
+    ringRotation: state.ringRotation,
+    ringTiltX: state.ringTiltX,
+    ringTiltY: state.ringTiltY,
+    zoomFocusIndex: state.zoomFocusIndex,
+    zoomLevel: state.zoomLevel,
+    showCellMetadata: state.showCellMetadata,
+    showGridBackground: state.showGridBackground,
+    randomSeed: state.randomSeed,
     videoWidth: state.videoWidth,
     videoHeight: state.videoHeight,
     videoDuration: state.videoDuration,
     captureMode: state.captureMode,
     captureValue: state.captureValue,
-    customMeta: state.customMeta,
+    videoName: state.videoName,
+    videoFps: state.videoFps,
+    isExport: false,
   };
+
+
 
   return (
     <div className="app-container">
-      {/* Sidebar Control Panel */}
-      <Sidebar onExport={handleExport} exportDisabled={state.extractedFrames.length === 0}>
-        
-        <SourceUpload
-          videoFile={state.videoFile}
-          videoDuration={state.videoDuration}
-          videoFps={state.videoFps}
-          videoWidth={state.videoWidth}
-          videoHeight={state.videoHeight}
-          onFileSelect={handleFileSelect}
-          isExtracting={state.isExtracting}
-          extractedFrames={state.extractedFrames}
-          onDelete={() => {
-            if (state.videoUrl) {
-              URL.revokeObjectURL(state.videoUrl);
-            }
-            state.setVideoFile(null);
-            state.setVideoUrl(null);
-            state.setExtractedFrames([]);
-            state.setVideoWidth(0);
-            state.setVideoHeight(0);
-            state.setVideoDuration(0);
-            state.setVideoFps(30);
-            state.setCustomMeta('');
-            state.setStatusText('AWAITING VIDEO FILE UPLOAD...');
-            state.setStatusType('warning');
-          }}
-        />
+      {/* Top Header Navbar */}
+      <header className="app-header">
+        <div className="header-brand">
+          <span className="brand-title">CPG PRINTER</span>
+          <span className="brand-dot">•</span>
+          <span className="brand-subtitle">CHRONOPHOTOGRAPHIC STUDY</span>
+        </div>
+      </header>
 
-        <FramingControls
-          captureMode={state.captureMode}
-          setCaptureMode={state.setCaptureMode}
-          captureValue={state.captureValue}
-          setCaptureValue={state.setCaptureValue}
-          estimatedStillsCount={timestamps.length}
-        />
+      {/* Main Content Body */}
+      <div className="app-body">
+        {!state.isCheckoutOpen ? (
+          <>
+            {/* Left/Top Workspace Area */}
+            <PosterPreview
+              settings={settings}
+              statusText={state.statusText}
+              statusType={state.statusType}
+              clipStart={state.clipStart}
+              setClipStart={state.setClipStart}
+              clipEnd={state.clipEnd}
+              setClipEnd={state.setClipEnd}
+            />
 
-        <GridControls
-          layoutMode={state.layoutMode}
-          setLayoutMode={state.setLayoutMode}
-          manualColumns={state.manualColumns}
-          setManualColumns={state.setManualColumns}
-          gapSize={state.gapSize}
-          setGapSize={state.setGapSize}
-          matteMargin={state.matteMargin}
-          setMatteMargin={state.setMatteMargin}
-        />
+            {/* Right/Bottom Sidebar Control Panel */}
+            <Sidebar
+              onExport={handleExport}
+              exportDisabled={state.extractedFrames.length === 0}
+              onBuy={() => {
+                state.setIsCheckoutOpen(true);
+              }}
+            >
+              <PageControls
+                aspectRatio={state.aspectRatio}
+                setAspectRatio={state.setAspectRatio}
+                matteMargin={state.matteMargin}
+                setMatteMargin={state.setMatteMargin}
+              />
 
-        <RenderControls
-          colorMode={state.colorMode}
-          setColorMode={state.setColorMode}
-          labelType={state.labelType}
-          setLabelType={state.setLabelType}
-        />
+              <SourceUpload
+                videoFile={state.videoFile}
+                videoDuration={state.videoDuration}
+                videoFps={state.videoFps}
+                videoWidth={state.videoWidth}
+                videoHeight={state.videoHeight}
+                onFileSelect={handleFileSelect}
+                isExtracting={state.isExtracting}
+                extractedFrames={state.extractedFrames}
+                onDelete={() => {
+                  if (state.videoUrl) {
+                    URL.revokeObjectURL(state.videoUrl);
+                  }
+                  state.setVideoFile(null);
+                  state.setVideoUrl(null);
+                  state.setExtractedFrames([]);
+                  state.setVideoWidth(0);
+                  state.setVideoHeight(0);
+                  state.setVideoDuration(0);
+                  state.setVideoFps(30);
+                  state.setVideoName('STUDIO_CLIP');
+                  state.setStatusText('AWAITING VIDEO FILE UPLOAD...');
+                  state.setStatusType('warning');
+                }}
+                videoName={state.videoName}
+                setVideoName={state.setVideoName}
+              />
 
-        <EditionControls
-          aspectRatio={state.aspectRatio}
-          setAspectRatio={state.setAspectRatio}
-          customMeta={state.customMeta}
-          setCustomMeta={state.setCustomMeta}
-        />
-      </Sidebar>
+              <GridControls
+                styleMode={state.styleMode}
+                setStyleMode={state.setStyleMode}
+                gapSize={state.gapSize}
+                setGapSize={state.setGapSize}
+                showGridBackground={state.showGridBackground}
+                setShowGridBackground={state.setShowGridBackground}
+                ringRotation={state.ringRotation}
+                setRingRotation={state.setRingRotation}
+                ringTiltX={state.ringTiltX}
+                setRingTiltX={state.setRingTiltX}
+                ringTiltY={state.ringTiltY}
+                setRingTiltY={state.setRingTiltY}
+                zoomFocusIndex={state.zoomFocusIndex}
+                setZoomFocusIndex={state.setZoomFocusIndex}
+                zoomLevel={state.zoomLevel}
+                setZoomLevel={state.setZoomLevel}
+                scaleRandomness={state.scaleRandomness}
+                setScaleRandomness={state.setScaleRandomness}
+                positionRandomness={state.positionRandomness}
+                setPositionRandomness={state.setPositionRandomness}
+                rotationRandomness={state.rotationRandomness}
+                setRotationRandomness={state.setRotationRandomness}
+                alternateMirror={state.alternateMirror}
+                setAlternateMirror={state.setAlternateMirror}
+                showCellMetadata={state.showCellMetadata}
+                setShowCellMetadata={state.setShowCellMetadata}
+                randomSeed={state.randomSeed}
+                setRandomSeed={state.setRandomSeed}
+                totalFrames={state.extractedFrames.length}
+              />
 
-      {/* Right Canvas Preview Area */}
-      <PosterPreview
-        settings={settings}
-        statusText={state.statusText}
-        statusType={state.statusType}
-      />
+              <FramingControls
+                captureValue={state.captureValue}
+                setCaptureValue={state.setCaptureValue}
+                availableFrames={availableFrames}
+              />
+
+              <RenderControls
+                colorMode={state.colorMode}
+                setColorMode={state.setColorMode}
+                paperColor={state.paperColor}
+                setPaperColor={state.setPaperColor}
+              />
+            </Sidebar>
+          </>
+        ) : (
+          <div className="workspace-checkout">
+            <CartView
+              state={state}
+              settings={settings}
+              onBackToCreate={() => state.setIsCheckoutOpen(false)}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Global Floating Status Notifications (macOS style stacking toasts) */}
+      <div className="notifications-container">
+        {state.notifications.map((n) => (
+          <div key={n.id} className={`status-notification ${n.type}${n.fadeState === 'out' ? ' fade-out' : ''}`}>
+            <span className="status-indicator"></span>
+            <span className="status-text">{n.text}</span>
+          </div>
+        ))}
+      </div>
 
       {/* Hidden Video element for native decoding (opacity 0.001 trick) */}
       <video

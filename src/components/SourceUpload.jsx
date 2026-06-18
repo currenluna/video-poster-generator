@@ -41,6 +41,8 @@ export default function SourceUpload({
   isExtracting,
   extractedFrames,
   onDelete,
+  videoName,
+  setVideoName,
 }) {
   const fileInputRef = useRef(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -88,7 +90,7 @@ export default function SourceUpload({
 
   return (
     <section className="control-section">
-      <h2>01 / SOURCE</h2>
+      <h2>02 / SOURCE</h2>
 
       <input
         type="file"
@@ -168,6 +170,18 @@ export default function SourceUpload({
           )}
         </div>
       )}
+
+      {/* Custom File Name override */}
+      <div className="control-row">
+        <label htmlFor="poster-meta">FILE NAME:</label>
+        <input
+          type="text"
+          id="poster-meta"
+          placeholder="e.g. STUDIO_CLIP"
+          value={videoName}
+          onChange={(e) => setVideoName(e.target.value.toUpperCase())}
+        />
+      </div>
     </section>
   );
 }

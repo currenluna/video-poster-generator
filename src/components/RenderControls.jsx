@@ -1,18 +1,13 @@
 /**
- * RenderControls — Color mode toggle (B&W / Color) and label type selector.
- *
- * 💡 Svelte comparison: This is a straightforward component with two controls.
- *    In Svelte, the toggle buttons would use `on:click` and `class:active`.
- *    In React, we use `onClick` and build className strings.
+ * RenderControls — Paper color selector and color mode toggles.
  */
-
 export default function RenderControls({
   colorMode, setColorMode,
-  labelType, setLabelType,
+  paperColor, setPaperColor,
 }) {
   return (
     <section className="control-section">
-      <h2>04 / RENDER</h2>
+      <h2>05 / RENDER</h2>
 
       {/* Color mode toggle */}
       <div className="toggle-row">
@@ -21,30 +16,42 @@ export default function RenderControls({
           <button
             className={`switch-btn${colorMode === 'bw' ? ' active' : ''}`}
             onClick={() => setColorMode('bw')}
+            title="Grayscale mode"
           >
             GRAYSCALE
           </button>
           <button
             className={`switch-btn${colorMode === 'color' ? ' active' : ''}`}
             onClick={() => setColorMode('color')}
+            title="Full color mode"
           >
             COLOR
+          </button>
+          <button
+            className={`switch-btn${colorMode === 'gradient' ? ' active' : ''}`}
+            onClick={() => setColorMode('gradient')}
+            title="Dark-to-light gradient tint mode"
+          >
+            GRADIENT TINT
           </button>
         </div>
       </div>
 
-      {/* Label type selector */}
+      {/* Paper Color / Grid Theme */}
       <div className="control-row">
-        <label htmlFor="label-type">LABELS:</label>
+        <label htmlFor="paper-color">PAPER COLOR:</label>
         <select
-          id="label-type"
-          value={labelType}
-          onChange={(e) => setLabelType(e.target.value)}
+          id="paper-color"
+          value={paperColor}
+          onChange={(e) => setPaperColor(e.target.value)}
         >
-          <option value="seq">SEQUENTIAL GRID INDEX (1, 2, 3...)</option>
-          <option value="index">ABSOLUTE VIDEO FRAME INDEX (0, 30, 60...)</option>
-          <option value="time">TIMESTAMP (0.00S...)</option>
-          <option value="none">NO LABEL</option>
+          <option value="white">STUDIO WHITE</option>
+          <option value="cream">BRAUN CREAM</option>
+          <option value="gray">SLATE GRAY</option>
+          <option value="black">MATTE BLACK</option>
+          <option value="olive">SAGE OLIVE</option>
+          <option value="terracotta">TERRACOTTA SAND</option>
+          <option value="navy">ARCHITECTURAL NAVY</option>
         </select>
       </div>
     </section>
