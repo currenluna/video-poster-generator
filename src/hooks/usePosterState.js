@@ -32,19 +32,28 @@ export default function usePosterState() {
   const [paperColor, setPaperColor] = useState('white');
   const [clipStart, setClipStart] = useState(0);
   const [clipEnd, setClipEnd] = useState(0);
+  const [stillFrameTime, setStillFrameTime] = useState(0); // independent timeline position for Still mode
   const [rotationRandomness, setRotationRandomness] = useState(0); // 0 to 15 degrees
   const [alternateMirror, setAlternateMirror] = useState(false);
-  const [styleMode, setStyleMode] = useState('grid-meta'); // 'grid-meta' | 'orbit' | 'zoom' | 'prog-vert' | 'prog-horiz'
-  const [ringRotation, setRingRotation] = useState(0); // 0 to 360 degrees
-  const [ringTiltX, setRingTiltX] = useState(-45); // -90 to 90 degrees
-  const [ringTiltY, setRingTiltY] = useState(0); // -90 to 90 degrees
+  const [styleMode, setStyleMode] = useState('still'); // 'still' | 'contact-sheet' | 'loop' | 'infinite-gallery' | 'triptych'
+  const [ringRotation, setRingRotation] = useState(0); // 0 to 360 degrees (Loop spin)
+  const [ringTiltX, setRingTiltX] = useState(-45); // -90 to 90 degrees (Loop pitch)
+  const [ringTiltY, setRingTiltY] = useState(0); // -90 to 90 degrees (Loop yaw)
   const [zoomFocusIndex, setZoomFocusIndex] = useState(0);
   const [zoomLevel, setZoomLevel] = useState(1.6); // Zoom factor multiplier (0.0 to 4.0)
   const [showCellMetadata, setShowCellMetadata] = useState(false);
+  const [metadataPosition, setMetadataPosition] = useState('top-right'); // 'top-right' | 'bottom-left'
   const [videoName, setVideoName] = useState('STUDIO_CLIP');
   const [showGridBackground, setShowGridBackground] = useState(true);
   const [randomSeed, setRandomSeed] = useState(1);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+
+  // New global state for mode-specific controls
+  const [paperType, setPaperType] = useState('matte'); // 'matte' | 'glossy' | 'luster'
+  const [gradientTint, setGradientTint] = useState('dusk-blue'); // curated gradient profile
+  const [contactSheetBgColor, setContactSheetBgColor] = useState('transparent'); // contact sheet fill
+  const [galleryDensity, setGalleryDensity] = useState(50); // 10–100
+  const [triptychTimestamps, setTriptychTimestamps] = useState([0, 0, 0]); // [t1, t2, t3]
   
   const [statusText, setStatusText] = useState('AWAITING VIDEO FILE UPLOAD...');
   const [statusType, setStatusType] = useState('warning'); // 'warning', 'active', 'error'
@@ -149,6 +158,7 @@ export default function usePosterState() {
     paperColor, setPaperColor,
     clipStart, setClipStart,
     clipEnd, setClipEnd,
+    stillFrameTime, setStillFrameTime,
     rotationRandomness, setRotationRandomness,
     alternateMirror, setAlternateMirror,
     styleMode, setStyleMode,
@@ -158,10 +168,16 @@ export default function usePosterState() {
     zoomFocusIndex, setZoomFocusIndex,
     zoomLevel, setZoomLevel,
     showCellMetadata, setShowCellMetadata,
+    metadataPosition, setMetadataPosition,
     videoName, setVideoName,
     showGridBackground, setShowGridBackground,
     randomSeed, setRandomSeed,
     isCheckoutOpen, setIsCheckoutOpen,
+    paperType, setPaperType,
+    gradientTint, setGradientTint,
+    contactSheetBgColor, setContactSheetBgColor,
+    galleryDensity, setGalleryDensity,
+    triptychTimestamps, setTriptychTimestamps,
     notifications,
     statusText, setStatusText,
     statusType, setStatusType,

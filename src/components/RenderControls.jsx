@@ -1,13 +1,17 @@
+import { GRADIENT_TINTS } from '../utils/constants';
+
 /**
- * RenderControls — Paper color selector and color mode toggles.
+ * RenderControls — Paper color, paper finish, color mode toggles, and gradient tint selector.
  */
 export default function RenderControls({
   colorMode, setColorMode,
   paperColor, setPaperColor,
+  paperType, setPaperType,
+  gradientTint, setGradientTint,
 }) {
   return (
     <section className="control-section">
-      <h2>05 / RENDER</h2>
+      <h2>04 / RENDER</h2>
 
       {/* Color mode toggle */}
       <div className="toggle-row">
@@ -16,9 +20,9 @@ export default function RenderControls({
           <button
             className={`switch-btn${colorMode === 'bw' ? ' active' : ''}`}
             onClick={() => setColorMode('bw')}
-            title="Grayscale mode"
+            title="Black & white mode"
           >
-            GRAYSCALE
+            B&W
           </button>
           <button
             className={`switch-btn${colorMode === 'color' ? ' active' : ''}`}
@@ -30,12 +34,28 @@ export default function RenderControls({
           <button
             className={`switch-btn${colorMode === 'gradient' ? ' active' : ''}`}
             onClick={() => setColorMode('gradient')}
-            title="Dark-to-light gradient tint mode"
+            title="Dark-to-light tint mode"
           >
-            GRADIENT TINT
+            TINT
           </button>
         </div>
       </div>
+
+      {/* Curated Tint Selector — only visible in tint color mode */}
+      {colorMode === 'gradient' && (
+        <div className="control-row">
+          <label htmlFor="gradient-tint">TINT PRESET:</label>
+          <select
+            id="gradient-tint"
+            value={gradientTint}
+            onChange={(e) => setGradientTint(e.target.value)}
+          >
+            {Object.entries(GRADIENT_TINTS).map(([key, tint]) => (
+              <option key={key} value={key}>{tint.label.toUpperCase()}</option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {/* Paper Color / Grid Theme */}
       <div className="control-row">
@@ -52,6 +72,20 @@ export default function RenderControls({
           <option value="olive">SAGE OLIVE</option>
           <option value="terracotta">TERRACOTTA SAND</option>
           <option value="navy">ARCHITECTURAL NAVY</option>
+        </select>
+      </div>
+
+      {/* Paper Finish Selection */}
+      <div className="control-row">
+        <label htmlFor="paper-type">PAPER FINISH:</label>
+        <select
+          id="paper-type"
+          value={paperType}
+          onChange={(e) => setPaperType(e.target.value)}
+        >
+          <option value="matte">FINE ART MATTE (200GSM)</option>
+          <option value="glossy">SATIN SEMI-GLOSS (240GSM)</option>
+          <option value="luster">ARCHIVAL LUSTER (260GSM)</option>
         </select>
       </div>
     </section>

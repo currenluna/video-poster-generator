@@ -2,7 +2,7 @@
  * posterRenderer.js — Canvas drawing logic for layout styles.
  */
 
-import { RESOLUTIONS } from './constants';
+import { RESOLUTIONS, GRADIENT_TINTS } from './constants';
 
 // Curated designer grid color options with readable matching text colors
 const GRID_COLORS = {
@@ -23,10 +23,31 @@ function seedRandom(seed) {
   return x - Math.floor(x);
 }
 
-/**
- * Calculates randomized translation offset and scaling for a frame cell,
- * keeping the frame centered within the original layout bounds.
- */
+// ---------------------------------------------------------------------------
+// 3D Math Helper: Apply Pitch, Yaw, and Roll Rotations to a Point
+// ---------------------------------------------------------------------------
+function rotate3DPoint(x, y, z, rotX, rotY, rotZ) {
+  const cosZ = Math.cos(rotZ);
+  const sinZ = Math.sin(rotZ);
+  const x1 = x * cosZ - y * sinZ;
+  const y1 = x * sinZ + y * cosZ;
+  const z1 = z;
+
+  const cosX = Math.cos(rotX);
+  const sinX = Math.sin(rotX);
+  const x2 = x1;
+  const y2 = y1 * cosX - z1 * sinX;
+  const z2 = y1 * sinX + z1 * cosX;
+
+  const cosY = Math.cos(rotY);
+  const sinY = Math.sin(rotY);
+  const x3 = x2 * cosY + z2 * sinY;
+  const y3 = y2;
+  const z3 = -x2 * sinY + z2 * cosY;
+
+  return { x: x3, y: y3, z: z3 };
+}
+
 function getFramePlacement(i, x, y, frameWidth, frameHeight, scaleRandomness, positionRandomness, scaleRatio, randomSeed = 1) {
   if (scaleRandomness === 0 && positionRandomness === 0) {
     return { x, y, w: frameWidth, h: frameHeight };
@@ -41,7 +62,6 @@ function getFramePlacement(i, x, y, frameWidth, frameHeight, scaleRandomness, po
   const w = frameWidth * scaleMult;
   const h = frameHeight * scaleMult;
 
-  // Offset randomness is specified in screen px, scale it to print resolution
   const dx = (rX - 0.5) * 2 * (positionRandomness * scaleRatio);
   const dy = (rY - 0.5) * 2 * (positionRandomness * scaleRatio);
 
@@ -51,12 +71,13 @@ function getFramePlacement(i, x, y, frameWidth, frameHeight, scaleRandomness, po
   return { x: finalX, y: finalY, w, h };
 }
 
-/**
- * Draws compact metadata label anchored to the top-right of a frame cell.
- * Two lines only: video source name and [frame number].
- * Font size scales relative to the individual frame width, not the global canvas.
- */
-function drawCellMetadataText(ctx, frame, x, y, frameWidth, frameHeight, scaleRatio, gridTheme, videoName, drawOnSide) {
+// Draws the filename/frame-index label just outside a frame's corner, in
+// plain text (no background box) colored to match whatever sits behind it
+// for maximum readability. `anchorX`/`anchorY` is the frame corner the label
+// sits just outside of: the frame's top-right corner for 'top-right'
+// placement, or its bottom-left corner for 'bottom-left' placement (a
+// caption "written on the matte" under the photo, left-aligned to it).
+function drawCellMetadataText(ctx, frame, anchorX, anchorY, refSize, textColor, videoName, placement = 'top-right') {
   const frameStr = String(frame.frameIndex || 0).padStart(4, '0');
   const cleanName = videoName.toUpperCase().replace(/\.[^/.]+$/, "");
   const textLines = [
@@ -64,48 +85,44 @@ function drawCellMetadataText(ctx, frame, x, y, frameWidth, frameHeight, scaleRa
     `[${frameStr}]`
   ];
 
-  // Size text relative to the frame cell (~3.5% of frame width), clamped to a sane range
-  const fontSize = Math.max(6, Math.min(28, Math.round(frameWidth * 0.035)));
+  const fontSize = Math.max(6, Math.min(28, Math.round(refSize * 0.035)));
   const fontMono = "'Space Mono', monospace";
   ctx.font = `${fontSize}px ${fontMono}`;
   ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = textColor;
 
   const lineSpacing = Math.round(fontSize * 1.2);
-  const pad = Math.max(2, Math.round(frameWidth * 0.01));
+  const pad = Math.max(2, Math.round(refSize * 0.01));
 
-  if (drawOnSide) {
-    // Draw beside the image (grid-meta style) — anchor top-right of cell area
-    ctx.textAlign = 'left';
-    ctx.fillStyle = gridTheme.textColor || '#121212';
-    const startX = x + frameWidth + pad;
-    const startY = y + pad;
-    textLines.forEach((line, idx) => {
-      ctx.fillText(line, startX, startY + idx * lineSpacing);
-    });
-  } else {
-    // Overlay anchored to top-right corner inside the frame
-    ctx.textAlign = 'right';
-    const textW = textLines.reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0);
-    const startX = x + frameWidth - pad;
-    const startY = y + pad;
+  const startX = placement === 'bottom-left' ? anchorX : anchorX + pad;
+  const startY = placement === 'bottom-left' ? anchorY + pad : anchorY;
 
-    // Subtle semi-transparent backing pill
-    ctx.save();
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
-    const bgW = textW + pad * 2;
-    const bgH = textLines.length * lineSpacing + pad * 2;
-    ctx.fillRect(startX - textW - pad, startY - pad, bgW, bgH);
+  textLines.forEach((line, idx) => {
+    ctx.fillText(line, startX, startY + idx * lineSpacing);
+  });
+}
 
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-    textLines.forEach((line, idx) => {
-      ctx.fillText(line, startX, startY + idx * lineSpacing);
-    });
-    ctx.restore();
-  }
+// Anchor point for a frame's metadata label, given its axis-aligned bounds.
+function getRectMetadataAnchor(x, y, w, h, placement) {
+  return placement === 'bottom-left'
+    ? { x, y: y + h }
+    : { x: x + w, y };
 }
 
 // ---------------------------------------------------------------------------
-// Optimal Grid Layout Solver (Always Auto Columns now)
+// Helper: get gradient tint RGB values for a given frame index
+// ---------------------------------------------------------------------------
+function getGradientTintRGB(tintKey, t) {
+  const tint = GRADIENT_TINTS[tintKey] || GRADIENT_TINTS['dusk-blue'];
+  const r = Math.round(tint.start[0] + (tint.end[0] - tint.start[0]) * t);
+  const g = Math.round(tint.start[1] + (tint.end[1] - tint.start[1]) * t);
+  const b = Math.round(tint.start[2] + (tint.end[2] - tint.start[2]) * t);
+  return { r, g, b };
+}
+
+// ---------------------------------------------------------------------------
+// Optimal Grid Layout Solver
 // ---------------------------------------------------------------------------
 export function solveOptimalLayout(N, frameWidth, frameHeight, targetWidth, targetHeight, gap, aspectRatio) {
   const frameAspect = frameWidth / frameHeight;
@@ -183,15 +200,19 @@ export function drawPoster(canvas, {
   zoomFocusIndex = 0,
   zoomLevel = 1.6,
   showCellMetadata = true,
+  metadataPosition = 'top-right',
   videoName = 'STUDIO_CLIP',
   videoFps = 30,
   showGridBackground = true,
   randomSeed = 1,
   isExport = false,
+  contactSheetBgColor = 'transparent',
+  galleryDensity = 50,
+  gradientTint = 'dusk-blue',
+  triptychTimestamps,
 }) {
   const res = RESOLUTIONS[aspectRatio];
 
-  // Scale down the canvas dimensions for real-time preview performance
   const targetWidth = isExport ? res.width : Math.round(res.width / 5);
   const targetHeight = isExport ? res.height : Math.round(res.height / 5);
 
@@ -221,9 +242,68 @@ export function drawPoster(canvas, {
   const videoAspect = videoWidth / videoHeight;
 
   // ---------------------------------------------------------------------------
-  // LAYOUT MODE: GRID WITH METADATA NEXT TO CELLS
+  // LAYOUT MODE: STILL (SINGLE FRAME)
   // ---------------------------------------------------------------------------
-  if (styleMode === 'grid-meta') {
+  if (styleMode === 'still') {
+    const focus = Math.max(0, Math.min(zoomFocusIndex, N - 1));
+    const frame = extractedFrames[focus];
+    if (frame) {
+      const frameAspect = videoWidth / videoHeight;
+      const maxW = printWidth;
+      const maxH = printHeight;
+      
+      let w = maxW;
+      let h = maxW / frameAspect;
+      if (h > maxH) {
+        h = maxH;
+        w = maxH * frameAspect;
+      }
+      
+      const x = marginX + (printWidth - w) / 2;
+      const y = marginY + (printHeight - h) / 2;
+      
+      ctx.save();
+      ctx.filter = (colorMode === 'bw' || colorMode === 'pop' || colorMode === 'gradient') ? 'grayscale(100%)' : 'none';
+      ctx.drawImage(frame.canvas, x, y, w, h);
+      
+      if (colorMode === 'pop') {
+        ctx.filter = 'none';
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.fillStyle = `hsla(180, 85%, 60%, 1)`;
+        ctx.fillRect(x, y, w, h);
+        
+        ctx.globalCompositeOperation = 'screen';
+        ctx.fillStyle = `hsla(180, 85%, 25%, 0.45)`;
+        ctx.fillRect(x, y, w, h);
+      } else if (colorMode === 'gradient') {
+        ctx.filter = 'none';
+        const { r, g, b } = getGradientTintRGB(gradientTint, 0.5);
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+        ctx.fillRect(x, y, w, h);
+        
+        ctx.globalCompositeOperation = 'screen';
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.25)`;
+        ctx.fillRect(x, y, w, h);
+      }
+      
+      ctx.strokeStyle = gridTheme.color;
+      ctx.lineWidth = Math.max(1, Math.round(1.0 * scaleRatio));
+      ctx.strokeRect(x, y, w, h);
+      
+      ctx.restore();
+      
+      if (showCellMetadata) {
+        const anchor = getRectMetadataAnchor(x, y, w, h, metadataPosition);
+        drawCellMetadataText(ctx, frame, anchor.x, anchor.y, w, gridTheme.textColor, videoName, metadataPosition);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // LAYOUT MODE: CONTACT SHEET
+  // ---------------------------------------------------------------------------
+  else if (styleMode === 'contact-sheet' || styleMode === 'grid-meta') {
     const layout = solveOptimalLayout(N, videoWidth, videoHeight, printWidth, printHeight, scaledGap, aspectRatio);
 
     const gridW = layout.columns * layout.frameWidth + (layout.columns - 1) * layout.usedGap;
@@ -231,10 +311,17 @@ export function drawPoster(canvas, {
     const gridX = marginX + (printWidth - gridW) / 2;
     const gridY = marginY + (printHeight - gridH) / 2;
 
+    // Use contactSheetBgColor if not 'transparent', otherwise fall back to paper color.
+    // Hoisted above the showGridBackground branch since the metadata text color needs
+    // to match whatever's actually behind it, whether or not the sheet fill is drawn.
+    const bgKey = contactSheetBgColor !== 'transparent' ? contactSheetBgColor : paperColor;
+    const bgTheme = GRID_COLORS[bgKey] || gridTheme;
+    const metadataTextColor = showGridBackground ? bgTheme.textColor : gridTheme.textColor;
+
     if (showGridBackground) {
-      ctx.fillStyle = gridTheme.color;
+      ctx.fillStyle = bgTheme.color;
       ctx.fillRect(gridX, gridY, gridW, gridH);
-      ctx.strokeStyle = gridTheme.color;
+      ctx.strokeStyle = bgTheme.color;
       ctx.lineWidth = Math.max(3, Math.round(2.5 * scaleRatio));
       ctx.strokeRect(gridX, gridY, gridW, gridH);
     }
@@ -249,8 +336,6 @@ export function drawPoster(canvas, {
       const x = gridX + c * (layout.frameWidth + layout.usedGap);
       const y = gridY + r * (layout.frameHeight + layout.usedGap);
 
-      // If cell metadata toggle is enabled, reserve 40% of cell width for the metadata text
-      // Scale height proportionally to preserve original video aspect ratio
       const drawWidth = showCellMetadata ? layout.frameWidth * 0.6 : layout.frameWidth;
       const drawHeight = showCellMetadata ? drawWidth / videoAspect : layout.frameHeight;
 
@@ -284,9 +369,7 @@ export function drawPoster(canvas, {
       } else if (colorMode === 'gradient') {
         ctx.filter = 'none';
         const t = totalDisplayFrames > 1 ? i / (totalDisplayFrames - 1) : 0.5;
-        const r = Math.round(20 + (245 - 20) * t);
-        const g = Math.round(30 + (240 - 30) * t);
-        const b = Math.round(48 + (230 - 48) * t);
+        const { r, g, b } = getGradientTintRGB(gradientTint, t);
         
         ctx.globalCompositeOperation = 'multiply';
         ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
@@ -297,127 +380,64 @@ export function drawPoster(canvas, {
         ctx.fillRect(-placement.w / 2, -placement.h / 2, placement.w, placement.h);
       }
 
-      // Draw photo border inside rotated context so it tilts together
-      ctx.strokeStyle = gridTheme.color;
-      ctx.lineWidth = Math.max(1, Math.round(1.0 * scaleRatio));
-      ctx.strokeRect(-placement.w / 2, -placement.h / 2, placement.w, placement.h);
-      
       ctx.restore();
 
       if (showCellMetadata) {
-        drawCellMetadataText(ctx, frame, x, y, drawWidth, drawHeight, scaleRatio, gridTheme, videoName, true);
+        const anchor = getRectMetadataAnchor(x, y, drawWidth, drawHeight, metadataPosition);
+        drawCellMetadataText(ctx, frame, anchor.x, anchor.y, drawWidth, metadataTextColor, videoName, metadataPosition);
       }
     }
   }
 
   // ---------------------------------------------------------------------------
-  // LAYOUT MODE: ORBIT RING WITH 1:1 SQUARE CROPPED PHOTOS
+  // LAYOUT MODE: LOOP (formerly RING) — 3D orbit ring
   // ---------------------------------------------------------------------------
-  else if (styleMode === 'orbit') {
+  else if (styleMode === 'loop' || styleMode === 'ring' || styleMode === 'orbit') {
     const cx = marginX + printWidth * 0.5;
     const cy = marginY + printHeight * 0.5;
     const R = printWidth * 0.33;
 
-    // Convert tilt angles to radians
     const rotX = (ringTiltX * Math.PI) / 180;
     const rotY = (ringTiltY * Math.PI) / 180;
     const rotZ = (ringRotation * Math.PI) / 180;
 
-    const D = printWidth * 1.0; // camera distance / perspective reference depth
+    const D = printWidth * 1.0;
 
     const orbitFrames = [];
     for (let i = 0; i < N; i++) {
       const t = i * (2 * Math.PI / N);
-      
       const x = R * Math.cos(t);
       const y = R * Math.sin(t);
       const z = 0;
 
-      // 3D rotations for the center point:
-      // 1. Z rotation (roll)
-      const cosZ = Math.cos(rotZ);
-      const sinZ = Math.sin(rotZ);
-      const x1 = x * cosZ - y * sinZ;
-      const y1 = x * sinZ + y * cosZ;
-      const z1 = z;
+      const centerRot = rotate3DPoint(x, y, z, rotX, rotY, rotZ);
 
-      // 2. X rotation (pitch)
-      const cosX = Math.cos(rotX);
-      const sinX = Math.sin(rotX);
-      const x2 = x1;
-      const y2 = y1 * cosX - z1 * sinX;
-      const z2 = y1 * sinX + z1 * cosX;
+      const perspectiveFactor = D / (D - centerRot.z);
+      const px = cx + centerRot.x * perspectiveFactor;
+      const py = cy + centerRot.y * perspectiveFactor;
 
-      // 3. Y rotation (yaw)
-      const cosY = Math.cos(rotY);
-      const sinY = Math.sin(rotY);
-      const x3 = x2 * cosY + z2 * sinY;
-      const y3 = y2;
-      const z3 = -x2 * sinY + z2 * cosY;
-
-      // Project center using perspective
-      const perspectiveFactor = D / (D - z3);
-      const px = cx + x3 * perspectiveFactor;
-      const py = cy + y3 * perspectiveFactor;
-
-      // Local orientation vectors of the photo plane:
-      // U: Horizontal axis (along the circle tangent)
       const ux = -Math.sin(t);
       const uy = Math.cos(t);
       const uz = 0;
 
-      // V: Vertical axis (standing vertically along circle's Z axis, pointing down for canvas alignment)
       const vx = 0;
       const vy = 0;
       const vz = -1;
-
-      // Rotate U (tangent) vector:
-      const ux1 = ux * cosZ - uy * sinZ;
-      const uy1 = ux * sinZ + uy * cosZ;
-      const uz1 = uz;
-
-      const ux2 = ux1;
-      const uy2 = uy1 * cosX - uz1 * sinX;
-      const uz2 = uy1 * sinX + uz1 * cosX;
-
-      const ux3 = ux2 * cosY + uz2 * sinY;
-      const uy3 = uy2;
-      const uz3 = -ux2 * sinY + uz2 * cosY;
-
-      // Rotate V (vertical) vector:
-      const vx1 = vx * cosZ - vy * sinZ;
-      const vy1 = vx * sinZ + vy * cosZ;
-      const vz1 = vz;
-
-      const vx2 = vx1;
-      const vy2 = vy1 * cosX - vz1 * sinX;
-      const vz2 = vy1 * sinX + vz1 * cosX;
-
-      const vx3 = vx2 * cosY + vz2 * sinY;
-      const vy3 = vy2;
-      const vz3 = -vx2 * sinY + vz2 * cosY;
 
       const baseW = printWidth * 0.15;
       const halfW = baseW / 2;
       const halfH = baseW / 2;
 
-      // Right endpoint point in 3D
-      const rx3 = x3 + halfW * ux3;
-      const ry3 = y3 + halfW * uy3;
-      const rz3 = z3 + halfW * uz3;
-      const rFactor = D / (D - rz3);
-      const rpx = cx + rx3 * rFactor;
-      const rpy = cy + ry3 * rFactor;
+      const rightRot = rotate3DPoint(x + halfW * ux, y + halfW * uy, z + halfW * uz, rotX, rotY, rotZ);
+      const rFactor = D / (D - rightRot.z);
+      const rpx = cx + rightRot.x * rFactor;
+      const rpy = cy + rightRot.y * rFactor;
 
-      // Top endpoint point in 3D
-      const tx3 = x3 + halfH * vx3;
-      const ty3 = y3 + halfH * vy3;
-      const tz3 = z3 + halfH * vz3;
-      const tFactor = D / (D - tz3);
-      const tpx = cx + tx3 * tFactor;
-      const tpy = cy + ty3 * tFactor;
+      const topRot = rotate3DPoint(x + halfH * vx, y + halfH * vy, z + halfH * vz, rotX, rotY, rotZ);
+      const tFactor = D / (D - topRot.z);
+      const tpx = cx + topRot.x * tFactor;
+      const tpy = cy + topRot.y * tFactor;
 
-      // Compute screen vectors relative to the projected center
       const dx = { x: rpx - px, y: rpy - py };
       const dy = { x: tpx - px, y: tpy - py };
 
@@ -431,52 +451,33 @@ export function drawPoster(canvas, {
         halfW,
         halfH,
         baseW,
-        depth: z3,
+        depth: centerRot.z,
         perspectiveFactor
       });
     }
 
-    // Sort by depth (farthest z3 drawn first)
     orbitFrames.sort((a, b) => a.depth - b.depth);
 
     orbitFrames.forEach(({ frame, index, px, py, dx, dy, halfW, halfH, baseW, perspectiveFactor }) => {
-      const seedOffset = randomSeed * 7919;
-      // Position offset
-      const posXOffset = positionRandomness > 0 ? (seedRandom(index + 100 + seedOffset) - 0.5) * positionRandomness * scaleRatio : 0;
-      const posYOffset = positionRandomness > 0 ? (seedRandom(index + 200 + seedOffset) - 0.5) * positionRandomness * scaleRatio : 0;
-      
-      // Scale multiplier
-      const scaleRandomVal = scaleRandomness > 0 ? 1.0 + (seedRandom(index + 300 + seedOffset) - 0.5) * (scaleRandomness / 100) : 1.0;
-      
-      // Rotation angle
-      const rotationRandomVal = seedRandom(index + 500 + seedOffset) - 0.5;
-      const angleRad = (rotationRandomVal * 2) * (rotationRandomness * Math.PI / 180);
-      const shouldMirror = alternateMirror && (index % 2 === 1);
+      const cellCx = px;
+      const cellCy = py;
 
-      const cellCx = px + posXOffset;
-      const cellCy = py + posYOffset;
-
-      const tDxX = dx.x * scaleRandomVal;
-      const tDxY = dx.y * scaleRandomVal;
-      const tDyX = dy.x * scaleRandomVal;
-      const tDyY = dy.y * scaleRandomVal;
+      const tDxX = dx.x;
+      const tDxY = dx.y;
+      const tDyX = dy.x;
+      const tDyY = dy.y;
 
       ctx.save();
       ctx.translate(cellCx, cellCy);
       
-      // Apply the 3D rotation projection transform matrix
       const a = tDxX / halfW;
       const b = tDxY / halfW;
       const c = tDyX / halfH;
       const d = tDyY / halfH;
       ctx.transform(a, b, c, d, 0, 0);
 
-      if (rotationRandomness > 0) ctx.rotate(angleRad);
-      if (shouldMirror) ctx.scale(-1, 1);
-
       ctx.filter = (colorMode === 'bw' || colorMode === 'pop' || colorMode === 'gradient') ? 'grayscale(100%)' : 'none';
       
-      // Perform center-cropping to a 1:1 square
       const srcW = frame.canvas.width;
       const srcH = frame.canvas.height;
       const cropSize = Math.min(srcW, srcH);
@@ -502,9 +503,7 @@ export function drawPoster(canvas, {
       } else if (colorMode === 'gradient') {
         ctx.filter = 'none';
         const t = N > 1 ? index / (N - 1) : 0.5;
-        const r = Math.round(20 + (245 - 20) * t);
-        const g = Math.round(30 + (240 - 30) * t);
-        const b = Math.round(48 + (230 - 48) * t);
+        const { r, g, b } = getGradientTintRGB(gradientTint, t);
         
         ctx.globalCompositeOperation = 'multiply';
         ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
@@ -515,7 +514,6 @@ export function drawPoster(canvas, {
         ctx.fillRect(-baseW / 2, -baseW / 2, baseW, baseW);
       }
 
-      // Draw border inside rotated context
       ctx.strokeStyle = gridTheme.color;
       ctx.lineWidth = Math.max(1, Math.round(1.0 * scaleRatio));
       ctx.strokeRect(-baseW / 2, -baseW / 2, baseW, baseW);
@@ -523,295 +521,196 @@ export function drawPoster(canvas, {
       ctx.restore();
 
       if (showCellMetadata) {
-        const flatW = baseW * perspectiveFactor * scaleRandomVal;
-        const flatH = flatW;
-        drawCellMetadataText(ctx, frame, cellCx - flatW / 2, cellCy - flatH / 2, flatW, flatH, scaleRatio, gridTheme, videoName, false);
+        // The photo itself is drawn through a 3D tilt/perspective transform (skewed,
+        // not axis-aligned), so the label can't use a naive square bounding box —
+        // that's what made it drift away from the photo. Instead, anchor the label
+        // to the photo's *actual* screen-projected corner (derived from the same
+        // dx/dy screen-space basis vectors used to draw the tilted quad), but draw
+        // the text itself outside that transform so it stays flat and facing the
+        // camera instead of skewing with the photo.
+        const flatSize = baseW * perspectiveFactor;
+        const corner = metadataPosition === 'bottom-left'
+          ? { x: cellCx - dx.x + dy.x, y: cellCy - dx.y + dy.y } // photo's bottom-left corner
+          : { x: cellCx + dx.x - dy.x, y: cellCy + dx.y - dy.y }; // photo's top-right corner
+        drawCellMetadataText(ctx, frame, corner.x, corner.y, flatSize, gridTheme.textColor, videoName, metadataPosition);
       }
     });
   }
 
   // ---------------------------------------------------------------------------
-  // LAYOUT MODE: ZOOM ON FOCUS FRAME (BLENDER PROPORTIONAL STYLE)
+  // LAYOUT MODE: INFINITE GALLERY (3D PERSPECTIVE SCATTER)
   // ---------------------------------------------------------------------------
-  else if (styleMode === 'zoom') {
-    // Use a zero-gap grid layout: all cells share edges, no spacing
-    const layout = solveOptimalLayout(N, videoWidth, videoHeight, printWidth, printHeight, 0, aspectRatio);
-
-    const gridW = layout.columns * layout.frameWidth;
-    const gridH = layout.rows * layout.frameHeight;
-    const gridX = marginX + (printWidth - gridW) / 2;
-    const gridY = marginY + (printHeight - gridH) / 2;
-
-    const focus = Math.max(0, Math.min(zoomFocusIndex, N - 1));
-    const focusCol = focus % layout.columns;
-    const focusRow = Math.floor(focus / layout.columns);
-
-    const zoomCells = [];
-    const totalDisplayFrames = layout.columns * layout.rows;
-    for (let i = 0; i < totalDisplayFrames; i++) {
+  else if (styleMode === 'infinite-gallery' || styleMode === 'zoom') {
+    const D = printWidth * 0.7;
+    const cx = marginX + printWidth * 0.5;
+    const cy = marginY + printHeight * 0.5;
+    
+    // Density controls card spread: lower density = more spread out
+    const spreadFactor = 1.5 - (galleryDensity / 100);
+    
+    const galleryFrames = [];
+    const seedOffset = randomSeed * 7919;
+    
+    for (let i = 0; i < N; i++) {
       const frame = extractedFrames[i];
       if (!frame) continue;
-
-      const r = Math.floor(i / layout.columns);
-      const c = i % layout.columns;
-      const x = gridX + c * layout.frameWidth;
-      const y = gridY + r * layout.frameHeight;
-
-      const dist = Math.sqrt((c - focusCol) ** 2 + (r - focusRow) ** 2);
       
-      const sigma = 1.3;
-      const falloff = Math.exp(- (dist ** 2) / (2 * (sigma ** 2)));
-      const scaleFactor = 1.0 + zoomLevel * falloff;
-
-      const w = layout.frameWidth * scaleFactor;
-      const h = layout.frameHeight * scaleFactor;
-
-      const cx = x + layout.frameWidth / 2;
-      const cy = y + layout.frameHeight / 2;
-
-      zoomCells.push({
+      // Depth spread: Z from 0 (front) to 600 (back)
+      const zPct = i / Math.max(1, N - 1);
+      const z = zPct * 600;
+      
+      // Scatter positions scaled by density
+      const rx = seedRandom(i + 100 + seedOffset) - 0.5;
+      const ry = seedRandom(i + 200 + seedOffset) - 0.5;
+      
+      const pxRaw = rx * printWidth * 0.85 * spreadFactor;
+      const pyRaw = ry * printHeight * 0.85 * spreadFactor;
+      
+      const scaleFactor = D / (D + z * 2.5);
+      const px = cx + pxRaw * scaleFactor;
+      const py = cy + pyRaw * scaleFactor;
+      
+      const baseW = printWidth * 0.16;
+      const baseH = baseW / videoAspect;
+      const w = baseW * scaleFactor;
+      const h = baseH * scaleFactor;
+      
+      // Opacity lowers as they are smaller or further back in Z space
+      const opacity = Math.max(0.08, Math.min(1.0, scaleFactor ** 1.8));
+      
+      galleryFrames.push({
         frame,
         index: i,
-        cx,
-        cy,
+        px,
+        py,
         w,
         h,
-        dist,
-        scaleFactor
+        z,
+        opacity
       });
     }
-
-    // Sort farthest first (painter's algorithm)
-    zoomCells.sort((a, b) => b.dist - a.dist);
-
-    // Clip all rendering to the grid rectangle so no cell overflows
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(gridX, gridY, gridW, gridH);
-    ctx.clip();
-
-    zoomCells.forEach(({ frame, index, cx, cy, w, h }) => {
+    
+    // Sort by depth (farthest first)
+    galleryFrames.sort((a, b) => b.z - a.z);
+    
+    galleryFrames.forEach(({ frame, index, px, py, w, h, opacity }) => {
       ctx.save();
+      
+      ctx.globalAlpha = opacity;
+      
+      ctx.translate(px, py);
+      
       ctx.filter = (colorMode === 'bw' || colorMode === 'pop' || colorMode === 'gradient') ? 'grayscale(100%)' : 'none';
-      ctx.drawImage(frame.canvas, cx - w / 2, cy - h / 2, w, h);
-
+      ctx.drawImage(frame.canvas, -w / 2, -h / 2, w, h);
+      
       if (colorMode === 'pop') {
         ctx.filter = 'none';
         const hue = Math.round((index * (360 / N)) % 360);
         ctx.globalCompositeOperation = 'multiply';
         ctx.fillStyle = `hsla(${hue}, 85%, 60%, 1)`;
-        ctx.fillRect(cx - w / 2, cy - h / 2, w, h);
-
+        ctx.fillRect(-w / 2, -h / 2, w, h);
+        
         ctx.globalCompositeOperation = 'screen';
         ctx.fillStyle = `hsla(${hue}, 85%, 25%, 0.45)`;
-        ctx.fillRect(cx - w / 2, cy - h / 2, w, h);
+        ctx.fillRect(-w / 2, -h / 2, w, h);
       } else if (colorMode === 'gradient') {
         ctx.filter = 'none';
         const t = N > 1 ? index / (N - 1) : 0.5;
-        const r = Math.round(20 + (245 - 20) * t);
-        const g = Math.round(30 + (240 - 30) * t);
-        const b = Math.round(48 + (230 - 48) * t);
+        const { r, g, b } = getGradientTintRGB(gradientTint, t);
         
         ctx.globalCompositeOperation = 'multiply';
         ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-        ctx.fillRect(cx - w / 2, cy - h / 2, w, h);
-
+        ctx.fillRect(-w / 2, -h / 2, w, h);
+        
         ctx.globalCompositeOperation = 'screen';
         ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.25)`;
-        ctx.fillRect(cx - w / 2, cy - h / 2, w, h);
+        ctx.fillRect(-w / 2, -h / 2, w, h);
       }
+      
+      ctx.strokeStyle = gridTheme.color;
+      ctx.lineWidth = Math.max(1, Math.round(1.0 * scaleRatio));
+      ctx.strokeRect(-w / 2, -h / 2, w, h);
+      
       ctx.restore();
-    });
-
-    // Restore clip region
-    ctx.restore();
-  }
-
-  // ---------------------------------------------------------------------------
-  // LAYOUT MODE: PROGRESSIVE ROW SCALING (VERTICAL) — OPTIMIZED ASPECT RATIO
-  // ---------------------------------------------------------------------------
-  else if (styleMode === 'prog-vert') {
-    const numRows = 4;
-    const weights = [2.5, 2.0, 1.5, 1.0]; // Less drastic size difference
-    const totalWeight = weights.reduce((a, b) => a + b, 0);
-
-    const rowCounts = weights.map(w => Math.round(N * w / totalWeight));
-    const sumCounts = rowCounts.reduce((a, b) => a + b, 0);
-    rowCounts[numRows - 1] += (N - sumCounts);
-
-    const rows = [];
-    let frameIdx = 0;
-    for (let r = 0; r < numRows; r++) {
-      const count = rowCounts[r] || 0;
-      const rowFrames = [];
-      for (let j = 0; j < count; j++) {
-        if (frameIdx < N) rowFrames.push(extractedFrames[frameIdx++]);
+      
+      if (showCellMetadata) {
+        const anchor = getRectMetadataAnchor(px - w / 2, py - h / 2, w, h, metadataPosition);
+        drawCellMetadataText(ctx, frame, anchor.x, anchor.y, w, gridTheme.textColor, videoName, metadataPosition);
       }
-      if (rowFrames.length > 0) rows.push(rowFrames);
-    }
-
-    const rowHeights = rows.map(rowFrames => {
-      const K = rowFrames.length;
-      const w = printWidth / K;
-      return w / videoAspect;
-    });
-    const totalH = rowHeights.reduce((a, b) => a + b, 0);
-
-    // Solve scaling factor to fit block completely inside margins matching paper shape
-    const scaleFactor = Math.min(1.0, printHeight / totalH);
-    const scaledWidth = printWidth * scaleFactor;
-    const scaledHeight = totalH * scaleFactor;
-
-    const startX = marginX + (printWidth - scaledWidth) / 2;
-    const startY = marginY + (printHeight - scaledHeight) / 2;
-    let currentY = startY;
-
-    rows.forEach((rowFrames, r) => {
-      const h = rowHeights[r] * scaleFactor;
-      const K = rowFrames.length;
-      const w = scaledWidth / K;
-
-      rowFrames.forEach((frame, idx) => {
-        const x = startX + idx * w;
-        const y = currentY;
-
-        ctx.save();
-        ctx.filter = (colorMode === 'bw' || colorMode === 'pop' || colorMode === 'gradient') ? 'grayscale(100%)' : 'none';
-        ctx.drawImage(frame.canvas, x, y, w, h);
-
-        if (colorMode === 'pop') {
-          ctx.filter = 'none';
-          const globalIdx = extractedFrames.indexOf(frame);
-          const hue = Math.round((globalIdx * (360 / N)) % 360);
-          ctx.globalCompositeOperation = 'multiply';
-          ctx.fillStyle = `hsla(${hue}, 85%, 60%, 1)`;
-          ctx.fillRect(x, y, w, h);
-
-          ctx.globalCompositeOperation = 'screen';
-          ctx.fillStyle = `hsla(${hue}, 85%, 25%, 0.45)`;
-          ctx.fillRect(x, y, w, h);
-        } else if (colorMode === 'gradient') {
-          ctx.filter = 'none';
-          const globalIdx = extractedFrames.indexOf(frame);
-          const t = N > 1 ? globalIdx / (N - 1) : 0.5;
-          const rVal = Math.round(20 + (245 - 20) * t);
-          const gVal = Math.round(30 + (240 - 30) * t);
-          const bVal = Math.round(48 + (230 - 48) * t);
-          
-          ctx.globalCompositeOperation = 'multiply';
-          ctx.fillStyle = `rgb(${rVal}, ${gVal}, ${bVal})`;
-          ctx.fillRect(x, y, w, h);
-
-          ctx.globalCompositeOperation = 'screen';
-          ctx.fillStyle = `rgba(${rVal}, ${gVal}, ${bVal}, 0.25)`;
-          ctx.fillRect(x, y, w, h);
-        }
-        ctx.restore();
-
-        ctx.strokeStyle = gridTheme.color;
-        ctx.lineWidth = Math.max(1, Math.round(1 * scaleRatio));
-        ctx.strokeRect(x, y, w, h);
-
-        if (showCellMetadata) {
-          drawCellMetadataText(ctx, frame, x, y, w, h, scaleRatio, gridTheme, videoName, false);
-        }
-      });
-
-      currentY += h;
     });
   }
 
   // ---------------------------------------------------------------------------
-  // LAYOUT MODE: PROGRESSIVE COLUMN SCALING (HORIZONTAL) — OPTIMIZED ASPECT RATIO
+  // LAYOUT MODE: TRIPTYCH (THREE MOMENTS IN TIME)
   // ---------------------------------------------------------------------------
-  else if (styleMode === 'prog-horiz') {
-    const numCols = 4;
-    const weights = [2.5, 2.0, 1.5, 1.0]; // Less drastic size difference
-    const totalWeight = weights.reduce((a, b) => a + b, 0);
-
-    const colCounts = weights.map(w => Math.round(N * w / totalWeight));
-    const sumCounts = colCounts.reduce((a, b) => a + b, 0);
-    colCounts[numCols - 1] += (N - sumCounts);
-
-    const cols = [];
-    let frameIdx = 0;
-    for (let c = 0; c < numCols; c++) {
-      const count = colCounts[c] || 0;
-      const colFrames = [];
-      for (let j = 0; j < count; j++) {
-        if (frameIdx < N) colFrames.push(extractedFrames[frameIdx++]);
+  else if (styleMode === 'triptych' || styleMode === 'prog-vert' || styleMode === 'prog-horiz') {
+    const selectedIndices = [0, Math.floor((N - 1) / 2), N - 1];
+    const triptychFrames = [];
+    if (N >= 3) {
+      triptychFrames.push(extractedFrames[selectedIndices[0]]);
+      triptychFrames.push(extractedFrames[selectedIndices[1]]);
+      triptychFrames.push(extractedFrames[selectedIndices[2]]);
+    } else {
+      for (let i = 0; i < 3; i++) {
+        triptychFrames.push(extractedFrames[Math.min(i, N - 1)]);
       }
-      if (colFrames.length > 0) cols.push(colFrames);
     }
-
-    const colWidths = cols.map(colFrames => {
-      const K = colFrames.length;
-      const h = printHeight / K;
-      return h * videoAspect;
-    });
-    const totalW = colWidths.reduce((a, b) => a + b, 0);
-
-    // Solve scaling factor to fit block completely inside margins matching paper shape
-    const scaleFactor = Math.min(1.0, printWidth / totalW);
-    const scaledWidth = totalW * scaleFactor;
-    const scaledHeight = printHeight * scaleFactor;
-
-    const startX = marginX + (printWidth - scaledWidth) / 2;
-    const startY = marginY + (printHeight - scaledHeight) / 2;
-    let currentX = startX;
-
-    cols.forEach((colFrames, c) => {
-      const w = colWidths[c] * scaleFactor;
-      const K = colFrames.length;
-      const h = scaledHeight / K;
-
-      colFrames.forEach((frame, idx) => {
-        const x = currentX;
-        const y = startY + idx * h;
-
-        ctx.save();
-        ctx.filter = (colorMode === 'bw' || colorMode === 'pop' || colorMode === 'gradient') ? 'grayscale(100%)' : 'none';
-        ctx.drawImage(frame.canvas, x, y, w, h);
-
-        if (colorMode === 'pop') {
-          ctx.filter = 'none';
-          const globalIdx = extractedFrames.indexOf(frame);
-          const hue = Math.round((globalIdx * (360 / N)) % 360);
-          ctx.globalCompositeOperation = 'multiply';
-          ctx.fillStyle = `hsla(${hue}, 85%, 60%, 1)`;
-          ctx.fillRect(x, y, w, h);
-
-          ctx.globalCompositeOperation = 'screen';
-          ctx.fillStyle = `hsla(${hue}, 85%, 25%, 0.45)`;
-          ctx.fillRect(x, y, w, h);
-        } else if (colorMode === 'gradient') {
-          ctx.filter = 'none';
-          const globalIdx = extractedFrames.indexOf(frame);
-          const t = N > 1 ? globalIdx / (N - 1) : 0.5;
-          const rVal = Math.round(20 + (245 - 20) * t);
-          const gVal = Math.round(30 + (240 - 30) * t);
-          const bVal = Math.round(48 + (230 - 48) * t);
-          
-          ctx.globalCompositeOperation = 'multiply';
-          ctx.fillStyle = `rgb(${rVal}, ${gVal}, ${bVal})`;
-          ctx.fillRect(x, y, w, h);
-
-          ctx.globalCompositeOperation = 'screen';
-          ctx.fillStyle = `rgba(${rVal}, ${gVal}, ${bVal}, 0.25)`;
-          ctx.fillRect(x, y, w, h);
-        }
-        ctx.restore();
-
-        ctx.strokeStyle = gridTheme.color;
-        ctx.lineWidth = Math.max(1, Math.round(1 * scaleRatio));
-        ctx.strokeRect(x, y, w, h);
-
-        if (showCellMetadata) {
-          drawCellMetadataText(ctx, frame, x, y, w, h, scaleRatio, gridTheme, videoName, false);
-        }
-      });
-
-      currentX += w;
+    
+    const K = 3;
+    let w = (printWidth - (K - 1) * scaledGap) / K;
+    let h = w / videoAspect;
+    if (h > printHeight) {
+      h = printHeight;
+      w = h * videoAspect;
+    }
+    
+    const totalW = K * w + (K - 1) * scaledGap;
+    const startX = marginX + (printWidth - totalW) / 2;
+    const startY = marginY + (printHeight - h) / 2;
+    
+    triptychFrames.forEach((frame, idx) => {
+      if (!frame) return;
+      const x = startX + idx * (w + scaledGap);
+      const y = startY;
+      
+      ctx.save();
+      ctx.filter = (colorMode === 'bw' || colorMode === 'pop' || colorMode === 'gradient') ? 'grayscale(100%)' : 'none';
+      ctx.drawImage(frame.canvas, x, y, w, h);
+      
+      if (colorMode === 'pop') {
+        ctx.filter = 'none';
+        const hue = Math.round((idx * (360 / K)) % 360);
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.fillStyle = `hsla(${hue}, 85%, 60%, 1)`;
+        ctx.fillRect(x, y, w, h);
+        
+        ctx.globalCompositeOperation = 'screen';
+        ctx.fillStyle = `hsla(${hue}, 85%, 25%, 0.45)`;
+        ctx.fillRect(x, y, w, h);
+      } else if (colorMode === 'gradient') {
+        ctx.filter = 'none';
+        const t = idx / (K - 1);
+        const { r, g, b } = getGradientTintRGB(gradientTint, t);
+        
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+        ctx.fillRect(x, y, w, h);
+        
+        ctx.globalCompositeOperation = 'screen';
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.25)`;
+        ctx.fillRect(x, y, w, h);
+      }
+      
+      ctx.strokeStyle = gridTheme.color;
+      ctx.lineWidth = Math.max(1, Math.round(1.0 * scaleRatio));
+      ctx.strokeRect(x, y, w, h);
+      
+      ctx.restore();
+      
+      if (showCellMetadata) {
+        const anchor = getRectMetadataAnchor(x, y, w, h, metadataPosition);
+        drawCellMetadataText(ctx, frame, anchor.x, anchor.y, w, gridTheme.textColor, videoName, metadataPosition);
+      }
     });
   }
 }

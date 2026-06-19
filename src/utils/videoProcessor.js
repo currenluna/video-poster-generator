@@ -43,28 +43,29 @@ export function loadVideoMetadata(video) {
         return;
       }
 
-      // Poll for dimensions (common browser decoder delay)
+      // Centralized listener cleanup to avoid duplicate code
+      const cleanup = () => {
+        clearInterval(interval);
+        video.removeEventListener('loadeddata', onDataLoaded);
+        video.removeEventListener('canplay', onDataLoaded);
+      };
+
+      // Poll for dimensions (handles common browser decoder delays)
       let checks = 0;
       const interval = setInterval(() => {
         checks++;
         if (video.videoWidth > 0 && video.videoHeight > 0) {
-          clearInterval(interval);
-          video.removeEventListener('loadeddata', onDataLoaded);
-          video.removeEventListener('canplay', onDataLoaded);
+          cleanup();
           resolve({ duration, width: video.videoWidth, height: video.videoHeight });
         } else if (checks >= 40) {
-          clearInterval(interval);
-          video.removeEventListener('loadeddata', onDataLoaded);
-          video.removeEventListener('canplay', onDataLoaded);
-          reject({ type: 'unsupported', message: 'NATIVE DECODER FAILED.' });
+          cleanup();
+          reject({ type: 'unsupported', message: 'NATIVE DECODER TIMEOUT RETRIEVING DIMENSIONS.' });
         }
       }, 50);
 
       const onDataLoaded = () => {
         if (video.videoWidth > 0 && video.videoHeight > 0) {
-          clearInterval(interval);
-          video.removeEventListener('loadeddata', onDataLoaded);
-          video.removeEventListener('canplay', onDataLoaded);
+          cleanup();
           resolve({ duration, width: video.videoWidth, height: video.videoHeight });
         }
       };

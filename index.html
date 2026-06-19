@@ -6,10 +6,10 @@
   <title>Video-to-Art Poster Generator</title>
   <meta name="description" content="Generate chronophotographic art posters from video files. Extract frames, customize layout, and export print-quality 300 PPI images.">
 
-  <!-- Typography: Lora (Serif) and Space Mono (Monospace) -->
+  <!-- Typography: Space Mono (labels/mono) + system sans-serif (body & headings, falls back to Arial) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400..700;1,400..700&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
 
   <!-- FFmpeg.wasm for client-side video decoding fallback (ProRes, HEVC, etc.) -->
   <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.0/dist/ffmpeg.min.js"></script>

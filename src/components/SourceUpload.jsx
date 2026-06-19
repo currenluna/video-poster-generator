@@ -21,15 +21,6 @@ function ThumbnailPreview({ canvas }) {
 
 /**
  * SourceUpload — Drag-and-drop upload zone and video info display.
- *
- * 💡 Svelte comparison:
- *    Ref binding:
- *      In Svelte: <input bind:this={inputEl} />
- *      In React: const inputEl = useRef(null); <input ref={inputEl} />
- *
- *    Dragover classes:
- *      In Svelte: class:dragover={isDragOver}
- *      In React: className={`drop-zone${isDragOver ? ' dragover' : ''}`}
  */
 export default function SourceUpload({
   videoFile,
@@ -41,8 +32,6 @@ export default function SourceUpload({
   isExtracting,
   extractedFrames,
   onDelete,
-  videoName,
-  setVideoName,
 }) {
   const fileInputRef = useRef(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -90,7 +79,7 @@ export default function SourceUpload({
 
   return (
     <section className="control-section">
-      <h2>02 / SOURCE</h2>
+      <h2>01 / UPLOAD</h2>
 
       <input
         type="file"
@@ -101,15 +90,16 @@ export default function SourceUpload({
         onChange={handleFileChange}
       />
 
-      {isExtracting ? (
-        <div className="upload-zone loading-zone">
-          <div className="spinner"></div>
-          <p className="upload-text">PROCESSING VIDEO...</p>
-          <p className="upload-sub">EXTRACTING STILL FRAMES</p>
-        </div>
-      ) : showThumbnail ? (
-        <div className="thumbnail-zone">
+      {showThumbnail ? (
+        <div
+          className="thumbnail-zone"
+          onClick={handleReplaceClick}
+          role="button"
+          tabIndex={0}
+          title="Click to replace video"
+        >
           <ThumbnailPreview canvas={extractedFrames[0].canvas} />
+          {isExtracting && <div className="thumbnail-refresh-spinner" title="Updating preview..." />}
           <div className="thumbnail-overlay">
             <div className="thumbnail-header">
               <button
@@ -123,15 +113,15 @@ export default function SourceUpload({
             </div>
             <div className="thumbnail-footer">
               <span className="thumbnail-filename" title={videoFile.name}>{displayName}</span>
-              <button
-                type="button"
-                className="btn-replace"
-                onClick={handleReplaceClick}
-              >
-                Replace
-              </button>
+              <span className="thumbnail-replace-hint">CLICK TO REPLACE</span>
             </div>
           </div>
+        </div>
+      ) : isExtracting ? (
+        <div className="upload-zone loading-zone">
+          <div className="spinner"></div>
+          <p className="upload-text">PROCESSING VIDEO...</p>
+          <p className="upload-sub">EXTRACTING STILL FRAMES</p>
         </div>
       ) : (
         <div
@@ -148,7 +138,7 @@ export default function SourceUpload({
         </div>
       )}
 
-      {videoFile && !isExtracting && (
+      {videoFile && (
         <div id="video-info" className="video-info-box">
           <div className="info-row">
             <span className="info-label">FILE:</span>
@@ -171,17 +161,6 @@ export default function SourceUpload({
         </div>
       )}
 
-      {/* Custom File Name override */}
-      <div className="control-row">
-        <label htmlFor="poster-meta">FILE NAME:</label>
-        <input
-          type="text"
-          id="poster-meta"
-          placeholder="e.g. STUDIO_CLIP"
-          value={videoName}
-          onChange={(e) => setVideoName(e.target.value.toUpperCase())}
-        />
-      </div>
     </section>
   );
 }

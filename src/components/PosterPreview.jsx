@@ -3,24 +3,18 @@ import { drawPoster } from '../utils/posterRenderer';
 import { RESOLUTIONS } from '../utils/constants';
 
 /**
- * PosterPreview — Renders the canvas and handles redrawing, infinite-canvas style zooming, panning, and mobile touch gestures.
+ * PosterPreview — Renders the canvas and handles redrawing, auto-fitting, 
+ * timeline trimming, and visualizer full-screen overlay tabs.
+ *
+ * Timeline modes:
+ * - Still: single draggable pointer, backed by its own stillFrameTime state
+ * - Triptych: three draggable pointers (sets triptychTimestamps)
+ * - Other: standard start/end trim range window (clipStart/clipEnd)
+ *
+ * Still, Triptych, and the trim-range modes each keep their own timeline
+ * state so switching styleMode never collapses one mode's saved position
+ * into another's.
  */
-function FilmstripThumb({ canvas }) {
-  const thumbCanvasRef = useRef(null);
-
-  useEffect(() => {
-    const destCanvas = thumbCanvasRef.current;
-    if (destCanvas && canvas) {
-      destCanvas.width = 80;
-      destCanvas.height = 60;
-      const ctx = destCanvas.getContext('2d');
-      ctx.drawImage(canvas, 0, 0, destCanvas.width, destCanvas.height);
-    }
-  }, [canvas]);
-
-  return <canvas ref={thumbCanvasRef} className="filmstrip-thumb-canvas" />;
-}
-
 export default function PosterPreview({
   settings,
   statusText,
@@ -29,6 +23,12 @@ export default function PosterPreview({
   setClipStart,
   clipEnd = 0,
   setClipEnd,
+  stillFrameTime = 0,
+  setStillFrameTime,
+  triptychTimestamps,
+  setTriptychTimestamps,
+  videoFps,
+  notifications = [],
 }) {
   const {
     extractedFrames,
@@ -57,16 +57,30 @@ export default function PosterPreview({
     captureMode,
     captureValue,
     videoName,
-    videoFps,
+    videoFps: settingsVideoFps,
     randomSeed,
     isExport,
   } = settings;
+
+  const fps = videoFps || settingsVideoFps || 30;
 
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const trackRef = useRef(null);
   const draggingRef = useRef(null);
 
+  // Fullscreen study overlay: a single true-fullscreen zoom/pan viewport, no nav/tabs.
+  const [isFullscreenOpen, setIsFullscreenOpen] = useState(false);
+  const [studyView, setStudyView] = useState({ scale: 1, x: 0, y: 0 });
+  const studyCanvasRef = useRef(null);
+  const fullscreenViewportRef = useRef(null);
+  const activePointersRef = useRef(new Map()); // pointerId -> {x, y}
+  const pinchStateRef = useRef(null); // { startDist, startScale }
+  const panStateRef = useRef(null); // { startX, startY, originX, originY }
+
+  // ---------------------------------------------------------------------------
+  // Standard start/end trim dragging
+  // ---------------------------------------------------------------------------
   const handleDragStart = (e, type) => {
     e.preventDefault();
     draggingRef.current = type;
@@ -81,10 +95,30 @@ export default function PosterPreview({
     const rect = trackRef.current.getBoundingClientRect();
     const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const newTime = pct * videoDuration;
+    const type = draggingRef.current;
 
-    if (draggingRef.current === 'start') {
+    // Still mode — single pointer, kept entirely separate from the trim range
+    if (styleMode === 'still') {
+      const t = Math.max(0, Math.min(newTime, videoDuration));
+      setStillFrameTime(t);
+      return;
+    }
+
+    // Triptych mode — drag pointers p1, p2, p3
+    if (type === 'p1' || type === 'p2' || type === 'p3') {
+      if (!triptychTimestamps || !setTriptychTimestamps) return;
+      const ts = [...triptychTimestamps];
+      if (type === 'p1') ts[0] = Math.max(0, Math.min(newTime, ts[1] - 0.1));
+      if (type === 'p2') ts[1] = Math.max(ts[0] + 0.1, Math.min(newTime, ts[2] - 0.1));
+      if (type === 'p3') ts[2] = Math.max(ts[1] + 0.1, Math.min(newTime, videoDuration));
+      setTriptychTimestamps(ts);
+      return;
+    }
+
+    // Default start/end trim
+    if (type === 'start') {
       setClipStart(Math.max(0, Math.min(newTime, clipEnd - 0.2)));
-    } else if (draggingRef.current === 'end') {
+    } else if (type === 'end') {
       setClipEnd(Math.max(clipStart + 0.2, Math.min(newTime, videoDuration)));
     }
   };
@@ -106,31 +140,13 @@ export default function PosterPreview({
     document.removeEventListener('touchend', handleDragEnd);
   };
 
-  const filmstripCount = 12;
-  const filmstripFrames = [];
-  const N_frames = extractedFrames.length;
-  if (N_frames > 0) {
-    for (let i = 0; i < filmstripCount; i++) {
-      const idx = Math.min(N_frames - 1, Math.floor((i / (filmstripCount - 1)) * (N_frames - 1)));
-      filmstripFrames.push(extractedFrames[idx]);
-    }
-  }
-
   const leftPct = videoDuration > 0 ? (clipStart / videoDuration) * 100 : 0;
   const rightPct = videoDuration > 0 ? (clipEnd / videoDuration) * 100 : 100;
   const widthPct = rightPct - leftPct;
+  const stillPct = videoDuration > 0 ? (stillFrameTime / videoDuration) * 100 : 0;
   
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
-  const [isFit, setIsFit] = useState(true);
-  const [isDragging, setIsDragging] = useState(false);
-  const [frameType, setFrameType] = useState('none');
-  const dragStartRef = useRef({ x: 0, y: 0, tx: 0, ty: 0 });
-
   const baseWidth = 800;
-
-  // Use a ref to always access the latest values inside event listeners without rebuilding them
-  const stateRef = useRef({ transform, settings, isFit });
-  stateRef.current = { transform, settings, isFit };
 
   const recalculateFit = () => {
     if (!containerRef.current) return;
@@ -159,396 +175,124 @@ export default function PosterPreview({
     setTransform({ x, y, scale });
   };
 
-  const zoomToScaleCentered = (targetScale, currentTransform) => {
-    if (!containerRef.current) return currentTransform;
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const mx = containerRect.width / 2;
-    const my = containerRect.height / 2;
-
-    const res = RESOLUTIONS[aspectRatio] || { width: 3, height: 4 };
-    const baseHeight = (res.height / res.width) * baseWidth;
-
-    const newScale = Math.max(0.15, Math.min(targetScale, 6.0));
-
-    const canvasX = (mx - currentTransform.x) / currentTransform.scale;
-    const canvasY = (my - currentTransform.y) / currentTransform.scale;
-
-    let newX = mx - canvasX * newScale;
-    let newY = my - canvasY * newScale;
-
-    // Apply bounding limits
-    const containerWidth = containerRect.width;
-    const containerHeight = containerRect.height;
-    const canvasW = baseWidth * newScale;
-    const canvasH = baseHeight * newScale;
-
-    const minOverlap = Math.min(150, Math.min(canvasW, canvasH) * 0.3);
-    const minX = minOverlap - canvasW;
-    const maxX = containerWidth - minOverlap;
-    const minY = minOverlap - canvasH;
-    const maxY = containerHeight - minOverlap;
-
-    newX = Math.max(minX, Math.min(newX, maxX));
-    newY = Math.max(minY, Math.min(newY, maxY));
-
-    return { x: newX, y: newY, scale: newScale };
-  };
-
-  // Recalculate fit when toggled, when aspect ratio changes, or when frames load
+  // Recalculate fit automatically on workspace resize or changes
   useEffect(() => {
-    if (isFit) {
-      recalculateFit();
-    }
-  }, [isFit, aspectRatio, extractedFrames.length]);
+    recalculateFit();
+  }, [aspectRatio, extractedFrames.length]);
 
-  // Handle window resizing
   useEffect(() => {
     const handleResize = () => {
-      if (isFit) {
-        recalculateFit();
-      }
+      recalculateFit();
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [isFit, aspectRatio]);
+  }, [aspectRatio]);
 
-  // Redraw the poster whenever any rendering setting or frames change
+  // Redraw the poster whenever rendering settings or frames change
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (canvasRef.current) {
+      drawPoster(canvasRef.current, settings);
+    }
+  }, [settings, extractedFrames]);
 
-    drawPoster(canvas, settings);
-  }, [
-    extractedFrames,
-    aspectRatio,
-    matteMargin,
-    gapSize,
-    scaleRandomness,
-    positionRandomness,
-    rotationRandomness,
-    alternateMirror,
-    paperColor,
-    layoutMode,
-    manualColumns,
-    colorMode,
-    styleMode,
-    ringRotation,
-    ringTiltX,
-    ringTiltY,
-    zoomFocusIndex,
-    zoomLevel,
-    showCellMetadata,
-    showGridBackground,
-    videoWidth,
-    videoHeight,
-    videoDuration,
-    captureMode,
-    captureValue,
-    videoName,
-    videoFps,
-    randomSeed,
-    isExport,
-  ]);
-
-  // Keyboard shortcuts listener for Ctrl/Cmd + '-' or '+'
+  // Redraw the fullscreen study canvas whenever it's open or settings change
   useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.ctrlKey || e.metaKey) {
-        if (e.key === '=' || e.key === '+') {
-          e.preventDefault();
-          setIsFit(false);
-          setTransform((prev) => zoomToScaleCentered(prev.scale + 0.1, prev));
-        } else if (e.key === '-') {
-          e.preventDefault();
-          setIsFit(false);
-          setTransform((prev) => zoomToScaleCentered(prev.scale - 0.1, prev));
-        } else if (e.key === '0') {
-          e.preventDefault();
-          setIsFit(true);
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+    if (isFullscreenOpen && studyCanvasRef.current) {
+      drawPoster(studyCanvasRef.current, settings);
+    }
+  }, [isFullscreenOpen, settings, extractedFrames]);
 
-  // Zoom via mouse wheel directly (without Command/Control requirement)
+  // Delegated wheel scrolling on preview panel to sidebar settings scroll
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const handleWheelRaw = (e) => {
-      e.preventDefault();
-
-      const { transform: currentTransform, settings: currentSettings } = stateRef.current;
-      const containerRect = container.getBoundingClientRect();
-
-      const mx = e.clientX - containerRect.left;
-      const my = e.clientY - containerRect.top;
-
-      const zoomFactor = e.deltaY < 0 ? 1.08 : 0.92;
-
-      setTransform((prev) => {
-        let newScale = prev.scale * zoomFactor;
-        newScale = Math.max(0.15, Math.min(newScale, 6.0));
-
-        const canvasX = (mx - prev.x) / prev.scale;
-        const canvasY = (my - prev.y) / prev.scale;
-
-        let newX = mx - canvasX * newScale;
-        let newY = my - canvasY * newScale;
-
-        const containerWidth = containerRect.width;
-        const containerHeight = containerRect.height;
-        const res = RESOLUTIONS[currentSettings.aspectRatio] || { width: 3, height: 4 };
-        const baseHeight = (res.height / res.width) * baseWidth;
-        const canvasW = baseWidth * newScale;
-        const canvasH = baseHeight * newScale;
-
-        const minOverlap = Math.min(150, Math.min(canvasW, canvasH) * 0.3);
-        const minX = minOverlap - canvasW;
-        const maxX = containerWidth - minOverlap;
-        const minY = minOverlap - canvasH;
-        const maxY = containerHeight - minOverlap;
-
-        newX = Math.max(minX, Math.min(newX, maxX));
-        newY = Math.max(minY, Math.min(newY, maxY));
-
-        return { x: newX, y: newY, scale: newScale };
-      });
-
-      setIsFit(false);
+      const controlGroups = document.querySelector('.control-groups');
+      if (controlGroups) {
+        controlGroups.scrollTop += e.deltaY;
+      }
     };
 
-    container.addEventListener('wheel', handleWheelRaw, { passive: false });
+    container.addEventListener('wheel', handleWheelRaw, { passive: true });
     return () => container.removeEventListener('wheel', handleWheelRaw);
   }, []);
 
-  // Multi-touch gestures (Pinch-to-zoom & Single-finger pan) for Mobile/Tablets
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    let isTouchZooming = false;
-    let initialTouchDist = 0;
-    let initialTouchScale = 1;
-    let canvasStartPoints = { x: 0, y: 0 };
-
-    const handleTouchStartRaw = (e) => {
-      if (e.touches.length === 1) {
-        // Single finger panning
-        const touch = e.touches[0];
-        setIsDragging(true);
-        dragStartRef.current = {
-          x: touch.clientX,
-          y: touch.clientY,
-          tx: stateRef.current.transform.x,
-          ty: stateRef.current.transform.y,
-        };
-        isTouchZooming = false;
-      } else if (e.touches.length === 2) {
-        // Two-finger pinch zooming
-        const touch1 = e.touches[0];
-        const touch2 = e.touches[1];
-        initialTouchDist = Math.hypot(touch1.clientX - touch2.clientX, touch1.clientY - touch2.clientY);
-        initialTouchScale = stateRef.current.transform.scale;
-
-        const containerRect = container.getBoundingClientRect();
-        const mx = ((touch1.clientX + touch2.clientX) / 2) - containerRect.left;
-        const my = ((touch1.clientY + touch2.clientY) / 2) - containerRect.top;
-        
-        canvasStartPoints = {
-          x: (mx - stateRef.current.transform.x) / initialTouchScale,
-          y: (my - stateRef.current.transform.y) / initialTouchScale,
-        };
-        
-        isTouchZooming = true;
-        setIsDragging(false); // Disable panning style offset during zooming
-      }
-    };
-
-    const handleTouchMoveRaw = (e) => {
-      const { settings: currentSettings } = stateRef.current;
-      const containerRect = container.getBoundingClientRect();
-
-      if (e.touches.length === 1 && !isTouchZooming) {
-        // Handle single finger panning
-        const touch = e.touches[0];
-        const dx = touch.clientX - dragStartRef.current.x;
-        const dy = touch.clientY - dragStartRef.current.y;
-
-        let newX = dragStartRef.current.tx + dx;
-        let newY = dragStartRef.current.ty + dy;
-
-        const containerWidth = containerRect.width;
-        const containerHeight = containerRect.height;
-        const res = RESOLUTIONS[currentSettings.aspectRatio] || { width: 3, height: 4 };
-        const baseHeight = (res.height / res.width) * baseWidth;
-        const canvasW = baseWidth * stateRef.current.transform.scale;
-        const canvasH = baseHeight * stateRef.current.transform.scale;
-
-        const minOverlap = Math.min(150, Math.min(canvasW, canvasH) * 0.3);
-        const minX = minOverlap - canvasW;
-        const maxX = containerWidth - minOverlap;
-        const minY = minOverlap - canvasH;
-        const maxY = containerHeight - minOverlap;
-
-        newX = Math.max(minX, Math.min(newX, maxX));
-        newY = Math.max(minY, Math.min(newY, maxY));
-
-        setTransform((prev) => ({ ...prev, x: newX, y: newY }));
-        setIsFit(false);
-
-        if (e.cancelable) e.preventDefault();
-      } else if (e.touches.length === 2 && isTouchZooming) {
-        // Handle dual finger pinch zoom
-        const touch1 = e.touches[0];
-        const touch2 = e.touches[1];
-        const dist = Math.hypot(touch1.clientX - touch2.clientX, touch1.clientY - touch2.clientY);
-
-        if (initialTouchDist > 0) {
-          const factor = dist / initialTouchDist;
-          let newScale = initialTouchScale * factor;
-          newScale = Math.max(0.15, Math.min(newScale, 6.0));
-
-          const mx = ((touch1.clientX + touch2.clientX) / 2) - containerRect.left;
-          const my = ((touch1.clientY + touch2.clientY) / 2) - containerRect.top;
-
-          let newX = mx - canvasStartPoints.x * newScale;
-          let newY = my - canvasStartPoints.y * newScale;
-
-          const containerWidth = containerRect.width;
-          const containerHeight = containerRect.height;
-          const res = RESOLUTIONS[currentSettings.aspectRatio] || { width: 3, height: 4 };
-          const baseHeight = (res.height / res.width) * baseWidth;
-          const canvasW = baseWidth * newScale;
-          const canvasH = baseHeight * newScale;
-
-          const minOverlap = Math.min(150, Math.min(canvasW, canvasH) * 0.3);
-          const minX = minOverlap - canvasW;
-          const maxX = containerWidth - minOverlap;
-          const minY = minOverlap - canvasH;
-          const maxY = containerHeight - minOverlap;
-
-          newX = Math.max(minX, Math.min(newX, maxX));
-          newY = Math.max(minY, Math.min(newY, maxY));
-
-          setTransform({ x: newX, y: newY, scale: newScale });
-          setIsFit(false);
-        }
-
-        if (e.cancelable) e.preventDefault();
-      }
-    };
-
-    const handleTouchEndRaw = () => {
-      setIsDragging(false);
-      isTouchZooming = false;
-    };
-
-    container.addEventListener('touchstart', handleTouchStartRaw, { passive: false });
-    container.addEventListener('touchmove', handleTouchMoveRaw, { passive: false });
-    container.addEventListener('touchend', handleTouchEndRaw, { passive: false });
-    container.addEventListener('touchcancel', handleTouchEndRaw, { passive: false });
-
-    return () => {
-      container.removeEventListener('touchstart', handleTouchStartRaw);
-      container.removeEventListener('touchmove', handleTouchMoveRaw);
-      container.removeEventListener('touchend', handleTouchEndRaw);
-      container.removeEventListener('touchcancel', handleTouchEndRaw);
-    };
-  }, []);
-
-  const handleMouseDown = (e) => {
-    // Support left-click (0) or middle-click (1)
-    if (e.button !== 0 && e.button !== 1) return;
-
-    // Prevent default browser autoscroll overlay on middle click
-    if (e.button === 1) {
-      e.preventDefault();
-    }
-
-    if (!containerRef.current) return;
-
-    setIsDragging(true);
-    dragStartRef.current = {
-      x: e.clientX,
-      y: e.clientY,
-      tx: transform.x,
-      ty: transform.y,
+  // ---------------------------------------------------------------------------
+  // Fullscreen study: zoom (wheel / pinch) + pan (drag), bounded so the paper
+  // can't be moved past its own edges relative to the center of the screen.
+  // ---------------------------------------------------------------------------
+  const clampStudyPan = (x, y, scale) => {
+    const vp = fullscreenViewportRef.current;
+    if (!vp) return { x, y };
+    const w = baseWidth * scale;
+    const h = baseHeight * scale;
+    const maxX = Math.max(0, (w - vp.clientWidth) / 2);
+    const maxY = Math.max(0, (h - vp.clientHeight) / 2);
+    return {
+      x: Math.max(-maxX, Math.min(maxX, x)),
+      y: Math.max(-maxY, Math.min(maxY, y)),
     };
   };
 
-  // Dragging / Panning effect
-  useEffect(() => {
-    if (!isDragging) return;
+  const handleFullscreenWheel = (e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    setStudyView((prev) => {
+      const scale = Math.max(0.4, Math.min(prev.scale * factor, 4.0));
+      const { x, y } = clampStudyPan(prev.x, prev.y, scale);
+      return { scale, x, y };
+    });
+  };
 
-    const handleMouseMove = (e) => {
-      const { transform: currentTransform, settings: currentSettings } = stateRef.current;
-      const dx = e.clientX - dragStartRef.current.x;
-      const dy = e.clientY - dragStartRef.current.y;
+  const handleStudyPointerDown = (e) => {
+    fullscreenViewportRef.current?.setPointerCapture(e.pointerId);
+    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-      let newX = dragStartRef.current.tx + dx;
-      let newY = dragStartRef.current.ty + dy;
+    if (activePointersRef.current.size === 2) {
+      const pts = [...activePointersRef.current.values()];
+      pinchStateRef.current = {
+        startDist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y),
+        startScale: studyView.scale,
+      };
+      panStateRef.current = null;
+    } else if (activePointersRef.current.size === 1) {
+      panStateRef.current = { startX: e.clientX, startY: e.clientY, originX: studyView.x, originY: studyView.y };
+    }
+  };
 
-      if (!containerRef.current) return;
-      const containerRect = containerRef.current.getBoundingClientRect();
-      const containerWidth = containerRect.width;
-      const containerHeight = containerRect.height;
+  const handleStudyPointerMove = (e) => {
+    if (!activePointersRef.current.has(e.pointerId)) return;
+    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-      const res = RESOLUTIONS[currentSettings.aspectRatio] || { width: 3, height: 4 };
-      const baseHeight = (res.height / res.width) * baseWidth;
-      const canvasW = baseWidth * currentTransform.scale;
-      const canvasH = baseHeight * currentTransform.scale;
+    if (activePointersRef.current.size === 2 && pinchStateRef.current) {
+      const pts = [...activePointersRef.current.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const scale = Math.max(0.4, Math.min((dist / pinchStateRef.current.startDist) * pinchStateRef.current.startScale, 4.0));
+      setStudyView((prev) => {
+        const { x, y } = clampStudyPan(prev.x, prev.y, scale);
+        return { scale, x, y };
+      });
+    } else if (activePointersRef.current.size === 1 && panStateRef.current) {
+      const dx = e.clientX - panStateRef.current.startX;
+      const dy = e.clientY - panStateRef.current.startY;
+      setStudyView((prev) => {
+        const { x, y } = clampStudyPan(panStateRef.current.originX + dx, panStateRef.current.originY + dy, prev.scale);
+        return { ...prev, x, y };
+      });
+    }
+  };
 
-      const minOverlap = Math.min(150, Math.min(canvasW, canvasH) * 0.3);
-      const minX = minOverlap - canvasW;
-      const maxX = containerWidth - minOverlap;
-      const minY = minOverlap - canvasH;
-      const maxY = containerHeight - minOverlap;
-
-      newX = Math.max(minX, Math.min(newX, maxX));
-      newY = Math.max(minY, Math.min(newY, maxY));
-
-      setTransform((prev) => ({ ...prev, x: newX, y: newY }));
-      setIsFit(false);
-    };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isDragging]);
-
-  const handleZoomChange = (e) => {
-    const val = e.target.value;
-    if (val === 'fit') {
-      setIsFit(true);
+  const handleStudyPointerUp = (e) => {
+    activePointersRef.current.delete(e.pointerId);
+    pinchStateRef.current = null;
+    if (activePointersRef.current.size === 1) {
+      const [[, pt]] = activePointersRef.current;
+      panStateRef.current = { startX: pt.x, startY: pt.y, originX: studyView.x, originY: studyView.y };
     } else {
-      setIsFit(false);
-      const targetScale = parseFloat(val);
-      setTransform((prev) => zoomToScaleCentered(targetScale, prev));
+      panStateRef.current = null;
     }
   };
-
-  const handleZoomIn = () => {
-    setIsFit(false);
-    setTransform((prev) => zoomToScaleCentered(prev.scale + 0.1, prev));
-  };
-
-  const handleZoomOut = () => {
-    setIsFit(false);
-    setTransform((prev) => zoomToScaleCentered(prev.scale - 0.1, prev));
-  };
-
-  const dropdownValue = isFit ? 'fit' : transform.scale.toFixed(2);
 
   const res = RESOLUTIONS[settings.aspectRatio] || { width: 3, height: 4 };
   const baseHeight = (res.height / res.width) * baseWidth;
@@ -575,8 +319,11 @@ export default function PosterPreview({
   const containerStyle = {
     position: 'relative',
     overflow: 'hidden',
-    cursor: isDragging ? 'grabbing' : 'grab',
+    cursor: 'default',
   };
+
+  // Format frame number from time
+  const timeToFrame = (t) => Math.round(t * fps);
 
   return (
     <div className="workspace">
@@ -584,120 +331,216 @@ export default function PosterPreview({
         className="poster-container" 
         ref={containerRef}
         style={containerStyle}
-        onMouseDown={handleMouseDown}
       >
-        <canvas 
-          id="poster-canvas" 
-          className="poster-canvas-preview" 
-          ref={canvasRef} 
+        <canvas
+          id="poster-canvas"
+          className="poster-canvas-preview"
+          ref={canvasRef}
           style={canvasStyle}
         />
+
+        {/* Floating Expand button to access visualizer mockup modal */}
+        {settings.extractedFrames.length > 0 && (
+          <button
+            type="button"
+            className="btn-expand-preview"
+            onClick={() => {
+              setIsFullscreenOpen(true);
+              setStudyView({ scale: 1, x: 0, y: 0 });
+            }}
+            title="Expand Fullscreen Print Study Mockup"
+            aria-label="View print study"
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 2H2v4" />
+              <path d="M10 14h4v-4" />
+              <path d="M14 2 9 7" />
+              <path d="M2 14l5-5" />
+            </svg>
+          </button>
+        )}
+
+        {/* Floating status notification stack — top-right of the canvas, newest on top */}
+        {notifications.length > 0 && (
+          <div className="notifications-container">
+            {[...notifications].reverse().map((n) => (
+              <div key={n.id} className={`status-notification ${n.type}${n.fadeState === 'out' ? ' fade-out' : ''}`}>
+                <span className="status-indicator"></span>
+                <span className="status-text">{n.text}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Interactive macOS-style timeline trim view */}
+      {/* Timeline bar — adapts to mode */}
       {settings.extractedFrames.length > 0 && settings.videoDuration > 0 && (
         <div className="timeline-bar">
           <div className="timeline-info">
-            <span>TRIM VIDEO: <span className="timeline-info-span">{clipStart.toFixed(1)}s - {clipEnd.toFixed(1)}s</span></span>
-            <span>DURATION: <span className="timeline-info-span">{(clipEnd - clipStart).toFixed(1)}s</span></span>
+            {styleMode === 'still' ? (
+              <>
+                <span>FRAME SELECT: <span className="timeline-info-span">#{timeToFrame(stillFrameTime)}</span></span>
+                <span>DURATION: <span className="timeline-info-span">{videoDuration.toFixed(1)}s</span></span>
+              </>
+            ) : styleMode === 'triptych' && triptychTimestamps ? (
+              <>
+                <span>TRIPTYCH: <span className="timeline-info-span">#{timeToFrame(triptychTimestamps[0])} / #{timeToFrame(triptychTimestamps[1])} / #{timeToFrame(triptychTimestamps[2])}</span></span>
+                <span>DURATION: <span className="timeline-info-span">{videoDuration.toFixed(1)}s</span></span>
+              </>
+            ) : (
+              <>
+                <span>TRIM: <span className="timeline-info-span">F{timeToFrame(clipStart)} – F{timeToFrame(clipEnd)}</span></span>
+                <span>DURATION: <span className="timeline-info-span">{(clipEnd - clipStart).toFixed(1)}s</span></span>
+              </>
+            )}
           </div>
 
           <div className="trim-track-wrapper" ref={trackRef}>
-            {/* Filmstrip Background */}
-            <div className="trim-filmstrip">
-              {filmstripFrames.map((f, index) => (
-                <div key={index} className="trim-filmstrip-thumb">
-                  <FilmstripThumb canvas={f.canvas} />
+            {/* ——— STILL MODE: single pointer ——— */}
+            {styleMode === 'still' ? (
+              <>
+                <div
+                  className="timeline-single-pointer"
+                  style={{ left: `${stillPct}%` }}
+                  onMouseDown={(e) => handleDragStart(e, 'start')}
+                  onTouchStart={(e) => handleDragStart(e, 'start')}
+                  title="Drag to select frame"
+                >
+                  <span className="pointer-label">▼</span>
                 </div>
-              ))}
-            </div>
+                {/* Still frame ticks */}
+                {settings.extractedFrames.map((frame, index) => {
+                  const tickPct = (frame.timestamp / settings.videoDuration) * 100;
+                  return (
+                    <div 
+                      key={index} 
+                      className="trim-marker-tick" 
+                      style={{ left: `${tickPct}%` }}
+                    />
+                  );
+                })}
+              </>
+            ) : styleMode === 'triptych' && triptychTimestamps ? (
+              /* ——— TRIPTYCH MODE: three pointers ——— */
+              <>
+                {triptychTimestamps.map((ts, idx) => {
+                  const pct = videoDuration > 0 ? (ts / videoDuration) * 100 : 0;
+                  const labels = ['1', '2', '3'];
+                  const handleId = `p${idx + 1}`;
+                  return (
+                    <div
+                      key={handleId}
+                      className={`timeline-triptych-pointer pointer-${idx}`}
+                      style={{ left: `${pct}%` }}
+                      onMouseDown={(e) => handleDragStart(e, handleId)}
+                      onTouchStart={(e) => handleDragStart(e, handleId)}
+                      title={`Drag to select frame ${idx + 1}`}
+                    >
+                      <span className="pointer-label">{labels[idx]}</span>
+                    </div>
+                  );
+                })}
+                {/* Frame ticks */}
+                {settings.extractedFrames.map((frame, index) => {
+                  const tickPct = (frame.timestamp / settings.videoDuration) * 100;
+                  return (
+                    <div 
+                      key={index} 
+                      className="trim-marker-tick" 
+                      style={{ left: `${tickPct}%` }}
+                    />
+                  );
+                })}
+              </>
+            ) : (
+              /* ——— DEFAULT: start/end trim range ——— */
+              <>
+                {/* Dark Overlay (Left of trim range) */}
+                <div className="trim-dim-overlay left" style={{ width: `${leftPct}%` }} />
 
-            {/* Dark Overlay (Left of trim range) */}
-            <div className="trim-dim-overlay left" style={{ width: `${leftPct}%` }} />
+                {/* Dark Overlay (Right of trim range) */}
+                <div className="trim-dim-overlay right" style={{ width: `${100 - rightPct}%` }} />
 
-            {/* Dark Overlay (Right of trim range) */}
-            <div className="trim-dim-overlay right" style={{ width: `${100 - rightPct}%` }} />
-
-            {/* Yellow Trim Selection Window */}
-            <div 
-              className="trim-selection-frame" 
-              style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
-            >
-              {/* Left drag handle */}
-              <div 
-                className="trim-handle left" 
-                onMouseDown={(e) => handleDragStart(e, 'start')}
-                onTouchStart={(e) => handleDragStart(e, 'start')}
-                title="Drag to trim start time"
-              />
-
-              {/* Right drag handle */}
-              <div 
-                className="trim-handle right" 
-                onMouseDown={(e) => handleDragStart(e, 'end')}
-                onTouchStart={(e) => handleDragStart(e, 'end')}
-                title="Drag to trim end time"
-              />
-            </div>
-
-            {/* Render capture ticks of all currently extracted stills */}
-            {settings.extractedFrames.map((frame, index) => {
-              const tickPct = (frame.timestamp / settings.videoDuration) * 100;
-              return (
+                {/* Yellow Trim Selection Window */}
                 <div 
-                  key={index} 
-                  className="trim-marker-tick" 
-                  style={{ left: `${tickPct}%` }}
-                />
-              );
-            })}
+                  className="trim-selection-frame" 
+                  style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                >
+                  {/* Left drag handle */}
+                  <div 
+                    className="trim-handle left" 
+                    onMouseDown={(e) => handleDragStart(e, 'start')}
+                    onTouchStart={(e) => handleDragStart(e, 'start')}
+                    title="Drag to trim start time"
+                  />
+
+                  {/* Right drag handle */}
+                  <div 
+                    className="trim-handle right" 
+                    onMouseDown={(e) => handleDragStart(e, 'end')}
+                    onTouchStart={(e) => handleDragStart(e, 'end')}
+                    title="Drag to trim end time"
+                  />
+                </div>
+
+                {/* Render capture ticks of all currently extracted stills */}
+                {settings.extractedFrames.map((frame, index) => {
+                  const tickPct = (frame.timestamp / settings.videoDuration) * 100;
+                  return (
+                    <div 
+                      key={index} 
+                      className="trim-marker-tick" 
+                      style={{ left: `${tickPct}%` }}
+                    />
+                  );
+                })}
+              </>
+            )}
           </div>
         </div>
       )}
 
-      {/* Floating Zoom Controls Bar */}
-      {settings.extractedFrames.length > 0 && (
-        <div className="zoom-bar">
-          <button 
-            type="button" 
-            className="zoom-btn" 
-            onClick={handleZoomOut} 
-            title="Zoom Out (Ctrl + -)"
-            disabled={!isFit && transform.scale <= 0.15}
+      {/* Fullscreen print study — true fullscreen, no nav chrome. Scroll/pinch to
+          zoom, drag to pan, bounded to the edges of the paper around center. */}
+      {isFullscreenOpen && (
+        <div className="fullscreen-overlay-bare">
+          <button
+            type="button"
+            className="fullscreen-close-btn-float"
+            onClick={() => setIsFullscreenOpen(false)}
+            aria-label="Close fullscreen print study"
           >
-            −
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+              <path d="M3 3l10 10M13 3 3 13" />
+            </svg>
           </button>
-          
-          <select 
-            className="zoom-select" 
-            value={dropdownValue} 
-            onChange={handleZoomChange}
-            aria-label="Select zoom level"
-          >
-            <option value="fit">Fit</option>
-            <option value="0.25">25%</option>
-            <option value="0.50">50%</option>
-            <option value="0.75">75%</option>
-            <option value="1.00">100%</option>
-            <option value="1.25">125%</option>
-            <option value="1.50">150%</option>
-            <option value="2.00">200%</option>
-            <option value="3.00">300%</option>
-            
-            {!isFit && !['0.25', '0.50', '0.75', '1.00', '1.25', '1.50', '2.00', '3.00'].includes(transform.scale.toFixed(2)) && (
-              <option value={transform.scale.toFixed(2)}>{Math.round(transform.scale * 100)}%</option>
-            )}
-          </select>
 
-          <button 
-            type="button" 
-            className="zoom-btn" 
-            onClick={handleZoomIn} 
-            title="Zoom In (Ctrl + =)"
-            disabled={!isFit && transform.scale >= 6.0}
+          <div
+            className="fullscreen-study-viewport"
+            ref={fullscreenViewportRef}
+            onWheel={handleFullscreenWheel}
+            onPointerDown={handleStudyPointerDown}
+            onPointerMove={handleStudyPointerMove}
+            onPointerUp={handleStudyPointerUp}
+            onPointerCancel={handleStudyPointerUp}
           >
-            ＋
-          </button>
+            <div
+              className="zoom-wrapper"
+              style={{
+                transform: `translate(${studyView.x}px, ${studyView.y}px) scale(${studyView.scale})`,
+                transformOrigin: 'center center',
+              }}
+            >
+              <canvas
+                ref={studyCanvasRef}
+                className="fullscreen-canvas study"
+                style={{
+                  width: `${baseWidth}px`,
+                  height: `${baseHeight}px`,
+                }}
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>

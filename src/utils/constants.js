@@ -16,6 +16,18 @@ export const RESOLUTIONS = {
 };
 
 // ---------------------------------------------------------------------------
+// Curated Gradient Tint Colour Presets
+// ---------------------------------------------------------------------------
+// Each key maps a gradient tint profile to its start/end RGB values.
+export const GRADIENT_TINTS = {
+  'dusk-blue':       { start: [20, 30, 48],   end: [150, 190, 230], label: 'Dusk Blue' },
+  'terracotta-warm': { start: [60, 25, 15],   end: [220, 155, 110], label: 'Terracotta Warm' },
+  'forest-mist':     { start: [15, 40, 25],   end: [140, 195, 160], label: 'Forest Mist' },
+  'cherry-cobalt':   { start: [50, 10, 30],   end: [200, 100, 140], label: 'Cherry Cobalt' },
+  'eclipse-black':   { start: [8, 8, 10],     end: [65, 65, 72],    label: 'Eclipse Black' },
+};
+
+// ---------------------------------------------------------------------------
 // Timestamp Calculator
 // ---------------------------------------------------------------------------
 /**
@@ -80,5 +92,5 @@ export function calculateTimestamps(duration, captureMode, captureValue, fps, cl
     timestamps.push(start);
   }
 
-  return timestamps.slice(0, 150); // Safety cap to prevent memory issues
+  return timestamps.slice(0, 200); // Safety cap to prevent memory issues
 }
