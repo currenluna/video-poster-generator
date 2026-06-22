@@ -198,7 +198,7 @@ export default function PosterPreview({
   // Redraw the fullscreen study canvas whenever it's open or settings change
   useEffect(() => {
     if (isFullscreenOpen && studyCanvasRef.current) {
-      drawPoster(studyCanvasRef.current, settings);
+      drawPoster(studyCanvasRef.current, { ...settings, isStudy: true });
     }
   }, [isFullscreenOpen, settings, extractedFrames]);
 
@@ -246,7 +246,11 @@ export default function PosterPreview({
   };
 
   const handleStudyPointerDown = (e) => {
-    fullscreenViewportRef.current?.setPointerCapture(e.pointerId);
+    try {
+      fullscreenViewportRef.current?.setPointerCapture(e.pointerId);
+    } catch (err) {
+      console.warn('Failed to set pointer capture:', err);
+    }
     activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
     if (activePointersRef.current.size === 2) {
@@ -274,10 +278,11 @@ export default function PosterPreview({
         return { scale, x, y };
       });
     } else if (activePointersRef.current.size === 1 && panStateRef.current) {
-      const dx = e.clientX - panStateRef.current.startX;
-      const dy = e.clientY - panStateRef.current.startY;
+      const { startX, startY, originX, originY } = panStateRef.current;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
       setStudyView((prev) => {
-        const { x, y } = clampStudyPan(panStateRef.current.originX + dx, panStateRef.current.originY + dy, prev.scale);
+        const { x, y } = clampStudyPan(originX + dx, originY + dy, prev.scale);
         return { ...prev, x, y };
       });
     }

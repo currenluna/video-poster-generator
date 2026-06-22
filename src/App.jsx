@@ -7,7 +7,6 @@ import AdjustControls from './components/AdjustControls';
 import RenderControls from './components/RenderControls';
 import PosterPreview from './components/PosterPreview';
 import CartView from './components/CartView';
-import SandboxView from './components/SandboxView';
 import LandingView from './components/LandingView';
 import { HowItWorksView, PressView, ContactView } from './components/SubPages';
 import { drawPoster } from './utils/posterRenderer';
@@ -17,6 +16,7 @@ import {
   detectFrameRate,
   extractFramesNative,
   extractFramesFFmpeg,
+  cleanupFFmpeg,
 } from './utils/videoProcessor';
 
 /**
@@ -64,6 +64,17 @@ export default function App() {
 
     const finalTsList = tsList;
 
+    // Calculate memory-safe maximum dimension for frames based on styleMode and frame count
+    const totalFrames = finalTsList.length;
+    let maxFrameDimension = 1024; // Default safe size for large layouts
+    if (state.styleMode === 'still' || totalFrames <= 3) {
+      maxFrameDimension = 3840; // Full resolution (up to 4K) for single frame or triptych
+    } else if (totalFrames <= 12) {
+      maxFrameDimension = 2048; // 2K resolution for small layouts
+    } else if (totalFrames <= 48) {
+      maxFrameDimension = 1280; // HD resolution for medium layouts
+    }
+
     const extractionId = Symbol('extractionId');
     currentExtractionIdRef.current = extractionId;
 
@@ -79,7 +90,7 @@ export default function App() {
     const shouldCancel = () => currentExtractionIdRef.current !== extractionId;
 
     if (forceFFmpeg) {
-      await runFFmpegExtraction(file, finalTsList, shouldCancel);
+      await runFFmpegExtraction(file, finalTsList, shouldCancel, maxFrameDimension);
       return;
     }
 
@@ -98,12 +109,20 @@ export default function App() {
             state.setStatusText(`EXTRACTING FRAME ${index + 1} OF ${total}...`);
           },
           shouldCancel,
+          maxFrameDimension,
         }
       );
 
       if (shouldCancel()) return;
 
       if (frames) {
+        // Force garbage collection of old canvases
+        state.extractedFrames.forEach((f) => {
+          if (f.canvas) {
+            f.canvas.width = 0;
+            f.canvas.height = 0;
+          }
+        });
         state.setExtractedFrames(frames);
         state.setIsExtracting(false);
         state.setStatusText('STILLS EXTRACTED. GENERATING POSTER...');
@@ -112,11 +131,11 @@ export default function App() {
     } catch (err) {
       console.warn('Native video seek/extraction failed. Initiating FFmpeg WASM fallback...', err);
       state.setUseFFmpegFallback(true);
-      await runFFmpegExtraction(file, finalTsList, shouldCancel);
+      await runFFmpegExtraction(file, finalTsList, shouldCancel, maxFrameDimension);
     }
   };
 
-  const runFFmpegExtraction = async (file, tsList, shouldCancel) => {
+  const runFFmpegExtraction = async (file, tsList, shouldCancel, maxFrameDimension) => {
     try {
       const frames = await extractFramesFFmpeg(
         file,
@@ -145,12 +164,20 @@ export default function App() {
             if (shouldCancel()) return;
             state.setVideoFps(fps);
           },
+          maxFrameDimension,
         }
       );
 
       if (shouldCancel()) return;
 
       if (frames) {
+        // Force garbage collection of old canvases
+        state.extractedFrames.forEach((f) => {
+          if (f.canvas) {
+            f.canvas.width = 0;
+            f.canvas.height = 0;
+          }
+        });
         state.setExtractedFrames(frames);
         state.setIsExtracting(false);
         state.setStatusText('STILLS EXTRACTED WITH FFMPEG. GENERATING POSTER...');
@@ -187,6 +214,15 @@ export default function App() {
     state.setUseFFmpegFallback(false);
     state.setVideoFile(file);
     state.setVideoName(file.name.replace(/\.[^/.]+$/, "").toUpperCase());
+
+    // Force garbage collection of old canvases
+    state.extractedFrames.forEach((f) => {
+      if (f.canvas) {
+        f.canvas.width = 0;
+        f.canvas.height = 0;
+      }
+    });
+
     state.setExtractedFrames([]);
     state.setVideoWidth(0);
     state.setVideoHeight(0);
@@ -273,6 +309,48 @@ export default function App() {
     }
   };
 
+  // 3a. Auto-load video from URL query parameter (?video=...)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const videoUrlParam = params.get('video');
+    if (videoUrlParam) {
+      setCurrentView('creator');
+      state.setStatusText('FETCHING VIDEO...');
+      state.setStatusType('warning');
+
+      // Resolve URL relative to the window location if needed
+      const resolvedUrl = videoUrlParam.startsWith('http://') || videoUrlParam.startsWith('https://')
+        ? videoUrlParam
+        : new URL(videoUrlParam, window.location.origin).href;
+
+      fetch(resolvedUrl)
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+          return res.blob();
+        })
+        .then((blob) => {
+          let filename = 'video.mp4';
+          try {
+            const urlObj = new URL(resolvedUrl);
+            const pathParts = urlObj.pathname.split('/');
+            filename = pathParts[pathParts.length - 1] || 'video.mp4';
+          } catch {
+            const pathParts = resolvedUrl.split('/');
+            filename = pathParts[pathParts.length - 1] || 'video.mp4';
+          }
+          // Clean filename from url query params if any
+          filename = filename.split('?')[0];
+          const file = new File([blob], filename, { type: blob.type || 'video/mp4' });
+          handleFileSelect(file);
+        })
+        .catch((err) => {
+          console.error('Failed to auto-load video from URL:', err);
+          state.setStatusText(`FAILED TO AUTO-LOAD VIDEO: ${err.message}`);
+          state.setStatusType('error');
+        });
+    }
+  }, []);
+
   // ---------------------------------------------------------------------------
   // Debounced Re-extraction on Interval / Trim Change
   // ---------------------------------------------------------------------------
@@ -331,26 +409,24 @@ export default function App() {
         const res = RESOLUTIONS[state.aspectRatio];
         const filename = `motion_study_${state.aspectRatio}_${res.width}x${res.height}.jpg`;
 
-        canvas.toBlob((blob) => {
-          if (!blob) {
-            state.setStatusText('EXPORT FAILED.');
-            state.setStatusType('error');
-            return;
-          }
+        // Use toDataURL to bypass COEP require-corp download restrictions on blob URLs
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+        
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.download = filename;
+        a.href = dataUrl;
+        
+        // Append to DOM to ensure browser respects the download filename attribute
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
 
-          const dlUrl = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.download = filename;
-          a.href = dlUrl;
-          a.click();
+        state.setStatusText('EXPORT COMPLETED.');
+        state.setStatusType('active');
 
-          setTimeout(() => URL.revokeObjectURL(dlUrl), 100);
-          state.setStatusText('EXPORT COMPLETED.');
-          state.setStatusType('active');
-
-          // Restore normal scaled-down resolution preview
-          drawPoster(canvas, { ...settings, isExport: false });
-        }, 'image/jpeg', 0.95);
+        // Restore normal scaled-down resolution preview
+        drawPoster(canvas, { ...settings, isExport: false });
       } catch (err) {
         console.error('Export failed:', err);
         state.setStatusText(`EXPORT ERROR: ${err.message}`);
@@ -396,6 +472,7 @@ export default function App() {
     galleryDensity: state.galleryDensity,
     gradientTint: state.gradientTint,
     triptychTimestamps: state.triptychTimestamps,
+    metadataSize: state.metadataSize,
   };
 
   return (
@@ -517,6 +594,15 @@ export default function App() {
                   }
                   state.setVideoFile(null);
                   state.setVideoUrl(null);
+
+                  // Force garbage collection of old canvases
+                  state.extractedFrames.forEach((f) => {
+                    if (f.canvas) {
+                      f.canvas.width = 0;
+                      f.canvas.height = 0;
+                    }
+                  });
+
                   state.setExtractedFrames([]);
                   state.setVideoWidth(0);
                   state.setVideoHeight(0);
@@ -525,6 +611,9 @@ export default function App() {
                   state.setVideoName('STUDIO_CLIP');
                   state.setStatusText('AWAITING VIDEO FILE UPLOAD...');
                   state.setStatusType('warning');
+
+                  // Free cached video memory from FFmpeg virtual filesystem
+                  cleanupFFmpeg();
                 }}
               />
 
@@ -537,6 +626,8 @@ export default function App() {
                 setShowCellMetadata={state.setShowCellMetadata}
                 metadataPosition={state.metadataPosition}
                 setMetadataPosition={state.setMetadataPosition}
+                metadataSize={state.metadataSize}
+                setMetadataSize={state.setMetadataSize}
                 videoFile={state.videoFile}
                 captureValue={state.captureValue}
                 setCaptureValue={state.setCaptureValue}

@@ -43,6 +43,7 @@ export default function usePosterState() {
   const [zoomLevel, setZoomLevel] = useState(1.6); // Zoom factor multiplier (0.0 to 4.0)
   const [showCellMetadata, setShowCellMetadata] = useState(false);
   const [metadataPosition, setMetadataPosition] = useState('top-right'); // 'top-right' | 'bottom-left'
+  const [metadataSize, setMetadataSize] = useState(5); // base font size
   const [videoName, setVideoName] = useState('STUDIO_CLIP');
   const [showGridBackground, setShowGridBackground] = useState(true);
   const [randomSeed, setRandomSeed] = useState(1);
@@ -169,6 +170,7 @@ export default function usePosterState() {
     zoomLevel, setZoomLevel,
     showCellMetadata, setShowCellMetadata,
     metadataPosition, setMetadataPosition,
+    metadataSize, setMetadataSize,
     videoName, setVideoName,
     showGridBackground, setShowGridBackground,
     randomSeed, setRandomSeed,

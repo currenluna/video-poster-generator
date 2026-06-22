@@ -185,7 +185,7 @@ function seekVideo(video, time) {
 // ---------------------------------------------------------------------------
 export async function extractFramesNative(
   video, timestamps, videoWidth, videoHeight, fps,
-  { onProgress, shouldCancel }
+  { onProgress, shouldCancel, maxFrameDimension }
 ) {
   const frames = [];
 
@@ -198,10 +198,22 @@ export async function extractFramesNative(
       await seekVideo(video, timestamps[i]);
       if (shouldCancel()) return null;
 
+      let w = videoWidth;
+      let h = videoHeight;
+      if (maxFrameDimension && (w > maxFrameDimension || h > maxFrameDimension)) {
+        if (w > h) {
+          h = Math.round((h * maxFrameDimension) / w);
+          w = maxFrameDimension;
+        } else {
+          w = Math.round((w * maxFrameDimension) / h);
+          h = maxFrameDimension;
+        }
+      }
+
       const canvas = document.createElement('canvas');
-      canvas.width = videoWidth;
-      canvas.height = videoHeight;
-      canvas.getContext('2d').drawImage(video, 0, 0, videoWidth, videoHeight);
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(video, 0, 0, w, h);
 
       frames.push({
         timestamp: timestamps[i],
@@ -258,20 +270,28 @@ async function initFFmpeg(onStatus, onDurationFound, onFpsFound) {
 
 export async function extractFramesFFmpeg(
   videoFile, timestamps, fps,
-  { onProgress, shouldCancel, onStatus, onDurationFound, onVideoInfo, onFpsFound }
+  { onProgress, shouldCancel, onStatus, onDurationFound, onVideoInfo, onFpsFound, maxFrameDimension }
 ) {
   const instance = await initFFmpeg(onStatus, onDurationFound, onFpsFound);
 
-  let fileExists = false;
+  let needWrite = true;
   try {
     instance.FS('stat', 'input.video');
-    fileExists = true;
+    if (instance._loadedFileName === videoFile.name && instance._loadedFileSize === videoFile.size) {
+      needWrite = false;
+    } else {
+      try {
+        instance.FS('unlink', 'input.video');
+      } catch {}
+    }
   } catch {}
 
-  if (!fileExists) {
+  if (needWrite) {
     onStatus('READING VIDEO FILE FOR DECODER...');
     const { fetchFile } = window.FFmpeg;
     instance.FS('writeFile', 'input.video', await fetchFile(videoFile));
+    instance._loadedFileName = videoFile.name;
+    instance._loadedFileSize = videoFile.size;
 
     try {
       await instance.run('-i', 'input.video');
@@ -311,10 +331,22 @@ export async function extractFramesFFmpeg(
       onVideoInfo(img.naturalWidth, img.naturalHeight);
     }
 
+    let w = img.naturalWidth;
+    let h = img.naturalHeight;
+    if (maxFrameDimension && (w > maxFrameDimension || h > maxFrameDimension)) {
+      if (w > h) {
+        h = Math.round((h * maxFrameDimension) / w);
+        w = maxFrameDimension;
+      } else {
+        w = Math.round((w * maxFrameDimension) / h);
+        h = maxFrameDimension;
+      }
+    }
+
     const canvas = document.createElement('canvas');
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    canvas.getContext('2d').drawImage(img, 0, 0);
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
     URL.revokeObjectURL(imgUrl);
 
     frames.push({
@@ -325,6 +357,16 @@ export async function extractFramesFFmpeg(
   }
 
   return shouldCancel() ? null : frames;
+}
+
+export function cleanupFFmpeg() {
+  if (ffmpegInstance) {
+    try {
+      ffmpegInstance.FS('unlink', 'input.video');
+    } catch {}
+    ffmpegInstance._loadedFileName = null;
+    ffmpegInstance._loadedFileSize = null;
+  }
 }
 
 // ---------------------------------------------------------------------------

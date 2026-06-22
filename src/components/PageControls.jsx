@@ -6,6 +6,7 @@ export default function PageControls({
   styleMode, setStyleMode,
   showCellMetadata, setShowCellMetadata,
   metadataPosition, setMetadataPosition,
+  metadataSize, setMetadataSize,
   videoFile,
   captureValue, setCaptureValue,
   availableFrames,
@@ -99,25 +100,42 @@ export default function PageControls({
 
       {/* Metadata placement — only matters once metadata is actually showing */}
       {showCellMetadata && (
-        <div className="toggle-row">
-          <span className="label-text">METADATA POSITION:</span>
-          <div className="switch-group">
-            <button
-              type="button"
-              className={`switch-btn${metadataPosition === 'top-right' ? ' active' : ''}`}
-              onClick={() => setMetadataPosition('top-right')}
-            >
-              TOP RIGHT
-            </button>
-            <button
-              type="button"
-              className={`switch-btn${metadataPosition === 'bottom-left' ? ' active' : ''}`}
-              onClick={() => setMetadataPosition('bottom-left')}
-            >
-              BOTTOM LEFT
-            </button>
+        <>
+          <div className="toggle-row">
+            <span className="label-text">METADATA POSITION:</span>
+            <div className="switch-group">
+              <button
+                type="button"
+                className={`switch-btn${metadataPosition === 'top-right' ? ' active' : ''}`}
+                onClick={() => setMetadataPosition('top-right')}
+              >
+                TOP RIGHT
+              </button>
+              <button
+                type="button"
+                className={`switch-btn${metadataPosition === 'bottom-left' ? ' active' : ''}`}
+                onClick={() => setMetadataPosition('bottom-left')}
+              >
+                BOTTOM LEFT
+              </button>
+            </div>
           </div>
-        </div>
+
+          <div className="control-row">
+            <label htmlFor="metadata-size">LABEL TEXT SIZE:</label>
+            <div className="slider-container">
+              <input
+                type="range"
+                id="metadata-size"
+                min="4"
+                max="24"
+                value={metadataSize}
+                onChange={(e) => setMetadataSize(parseInt(e.target.value))}
+              />
+              <span className="slider-val">{metadataSize}px</span>
+            </div>
+          </div>
+        </>
       )}
     </section>
   );

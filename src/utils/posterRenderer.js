@@ -77,7 +77,7 @@ function getFramePlacement(i, x, y, frameWidth, frameHeight, scaleRandomness, po
 // sits just outside of: the frame's top-right corner for 'top-right'
 // placement, or its bottom-left corner for 'bottom-left' placement (a
 // caption "written on the matte" under the photo, left-aligned to it).
-function drawCellMetadataText(ctx, frame, anchorX, anchorY, refSize, textColor, videoName, placement = 'top-right') {
+function drawCellMetadataText(ctx, frame, anchorX, anchorY, refSize, textColor, videoName, placement = 'top-right', metadataSize = 12) {
   const frameStr = String(frame.frameIndex || 0).padStart(4, '0');
   const cleanName = videoName.toUpperCase().replace(/\.[^/.]+$/, "");
   const textLines = [
@@ -85,7 +85,8 @@ function drawCellMetadataText(ctx, frame, anchorX, anchorY, refSize, textColor, 
     `[${frameStr}]`
   ];
 
-  const fontSize = Math.max(6, Math.min(28, Math.round(refSize * 0.035)));
+  const scaleRatio = ctx.canvas ? ctx.canvas.width / 800 : 1;
+  const fontSize = metadataSize * scaleRatio;
   const fontMono = "'Space Mono', monospace";
   ctx.font = `${fontSize}px ${fontMono}`;
   ctx.textBaseline = 'top';
@@ -93,7 +94,7 @@ function drawCellMetadataText(ctx, frame, anchorX, anchorY, refSize, textColor, 
   ctx.fillStyle = textColor;
 
   const lineSpacing = Math.round(fontSize * 1.2);
-  const pad = Math.max(2, Math.round(refSize * 0.01));
+  const pad = Math.round(fontSize * 0.4);
 
   const startX = placement === 'bottom-left' ? anchorX : anchorX + pad;
   const startY = placement === 'bottom-left' ? anchorY + pad : anchorY;
@@ -210,11 +211,13 @@ export function drawPoster(canvas, {
   galleryDensity = 50,
   gradientTint = 'dusk-blue',
   triptychTimestamps,
+  isStudy = false,
+  metadataSize = 12,
 }) {
   const res = RESOLUTIONS[aspectRatio];
 
-  const targetWidth = isExport ? res.width : Math.round(res.width / 5);
-  const targetHeight = isExport ? res.height : Math.round(res.height / 5);
+  const targetWidth = isExport ? res.width : isStudy ? Math.round(res.width / 2) : Math.round(res.width / 4);
+  const targetHeight = isExport ? res.height : isStudy ? Math.round(res.height / 2) : Math.round(res.height / 4);
 
   canvas.width = targetWidth;
   canvas.height = targetHeight;
@@ -295,7 +298,7 @@ export function drawPoster(canvas, {
       
       if (showCellMetadata) {
         const anchor = getRectMetadataAnchor(x, y, w, h, metadataPosition);
-        drawCellMetadataText(ctx, frame, anchor.x, anchor.y, w, gridTheme.textColor, videoName, metadataPosition);
+        drawCellMetadataText(ctx, frame, anchor.x, anchor.y, w, gridTheme.textColor, videoName, metadataPosition, metadataSize);
       }
     }
   }
@@ -384,7 +387,7 @@ export function drawPoster(canvas, {
 
       if (showCellMetadata) {
         const anchor = getRectMetadataAnchor(x, y, drawWidth, drawHeight, metadataPosition);
-        drawCellMetadataText(ctx, frame, anchor.x, anchor.y, drawWidth, metadataTextColor, videoName, metadataPosition);
+        drawCellMetadataText(ctx, frame, anchor.x, anchor.y, drawWidth, metadataTextColor, videoName, metadataPosition, metadataSize);
       }
     }
   }
@@ -532,7 +535,7 @@ export function drawPoster(canvas, {
         const corner = metadataPosition === 'bottom-left'
           ? { x: cellCx - dx.x + dy.x, y: cellCy - dx.y + dy.y } // photo's bottom-left corner
           : { x: cellCx + dx.x - dy.x, y: cellCy + dx.y - dy.y }; // photo's top-right corner
-        drawCellMetadataText(ctx, frame, corner.x, corner.y, flatSize, gridTheme.textColor, videoName, metadataPosition);
+        drawCellMetadataText(ctx, frame, corner.x, corner.y, flatSize, gridTheme.textColor, videoName, metadataPosition, metadataSize);
       }
     });
   }
@@ -635,7 +638,7 @@ export function drawPoster(canvas, {
       
       if (showCellMetadata) {
         const anchor = getRectMetadataAnchor(px - w / 2, py - h / 2, w, h, metadataPosition);
-        drawCellMetadataText(ctx, frame, anchor.x, anchor.y, w, gridTheme.textColor, videoName, metadataPosition);
+        drawCellMetadataText(ctx, frame, anchor.x, anchor.y, w, gridTheme.textColor, videoName, metadataPosition, metadataSize);
       }
     });
   }
@@ -709,7 +712,7 @@ export function drawPoster(canvas, {
       
       if (showCellMetadata) {
         const anchor = getRectMetadataAnchor(x, y, w, h, metadataPosition);
-        drawCellMetadataText(ctx, frame, anchor.x, anchor.y, w, gridTheme.textColor, videoName, metadataPosition);
+        drawCellMetadataText(ctx, frame, anchor.x, anchor.y, w, gridTheme.textColor, videoName, metadataPosition, metadataSize);
       }
     });
   }
